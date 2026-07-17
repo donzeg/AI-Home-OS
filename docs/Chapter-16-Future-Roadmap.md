@@ -1342,7 +1342,7 @@ AI Home OS is an attempt to build that intelligence. Not perfect. Not finished. 
 
 ---
 
-*Previous: [Chapter 15 — AI Conversation Examples](Chapter-15.md)*  
+*Previous: [Chapter 15 — AI Conversation Examples](Chapter-15-AI-Conversation-Examples.md)*  
 *[Return to Introduction: AI Home OS Architecture.md](../AI%20Home%20OS%20Architecture.md)*
 
 ---

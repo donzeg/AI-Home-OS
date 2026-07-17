@@ -1351,8 +1351,8 @@ GROUP BY 1, person_id, room;
 
 ---
 
-*Previous: [Chapter 04 — Audio System](Chapter-04.md)*  
-*Next: [Chapter 06 — Memory System](Chapter-06.md)*
+*Previous: [Chapter 04 — Audio System](Chapter-04-Audio-System.md)*  
+*Next: [Chapter 06 — Memory System](Chapter-06-Memory-System.md)*
 
 ---
 

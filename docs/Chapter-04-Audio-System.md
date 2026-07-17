@@ -1361,8 +1361,8 @@ If the AI server is completely offline:
 
 ---
 
-*Previous: [Chapter 03 — Vision System](Chapter-03.md)*  
-*Next: [Chapter 05 — Identity System](Chapter-05.md)*
+*Previous: [Chapter 03 — Vision System](Chapter-03-Vision-System.md)*  
+*Next: [Chapter 05 — Identity System](Chapter-05-Identity-System.md)*
 
 ---
 

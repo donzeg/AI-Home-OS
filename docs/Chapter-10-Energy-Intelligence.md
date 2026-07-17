@@ -1671,8 +1671,8 @@ Estimated runtime announced: "Battery has ~6 hours of power. Generator starts at
 
 ---
 
-*Previous: [Chapter 09 — Automation Engine](Chapter-09.md)*  
-*Next: [Chapter 11 — Security Architecture](Chapter-11.md)*
+*Previous: [Chapter 09 — Automation Engine](Chapter-09-Automation-Engine.md)*  
+*Next: [Chapter 11 — Security Architecture](Chapter-11-Security-Architecture.md)*
 
 ---
 

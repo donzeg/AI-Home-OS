@@ -1537,8 +1537,8 @@ homeios_reasoning_errors_total{agent, error_type}
 
 ---
 
-*Previous: [Chapter 06 — Memory System](Chapter-06.md)*  
-*Next: [Chapter 08 — Context Engine](Chapter-08.md)*
+*Previous: [Chapter 06 — Memory System](Chapter-06-Memory-System.md)*  
+*Next: [Chapter 08 — Context Engine](Chapter-08-Context-Engine.md)*
 
 ---
 

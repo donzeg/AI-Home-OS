@@ -230,22 +230,22 @@ This repository contains the complete design specification in 16 chapters. Each 
 
 | Chapter | Title | Status |
 |---------|-------|--------|
-| [Ch 01](docs/Chapter-01.md) | Physical Infrastructure | 🔄 In Progress |
-| [Ch 02](docs/Chapter-02.md) | Sensor Layer | ⏳ Queued |
-| [Ch 03](docs/Chapter-03.md) | Vision System | ⏳ Queued |
-| [Ch 04](docs/Chapter-04.md) | Audio System | ⏳ Queued |
-| [Ch 05](docs/Chapter-05.md) | Identity System | ⏳ Queued |
-| [Ch 06](docs/Chapter-06.md) | Memory System | ⏳ Queued |
-| [Ch 07](docs/Chapter-07.md) | AI Reasoning Engine | ⏳ Queued |
-| [Ch 08](docs/Chapter-08.md) | Context Engine | ⏳ Queued |
-| [Ch 09](docs/Chapter-09.md) | Automation Engine | ⏳ Queued |
-| [Ch 10](docs/Chapter-10.md) | Energy Intelligence | ⏳ Queued |
-| [Ch 11](docs/Chapter-11.md) | Security Architecture | ⏳ Queued |
-| [Ch 12](docs/Chapter-12.md) | API & Integration Layer | ⏳ Queued |
-| [Ch 13](docs/Chapter-13.md) | Mobile Application | ⏳ Queued |
-| [Ch 14](docs/Chapter-14.md) | Wall Panels | ⏳ Queued |
-| [Ch 15](docs/Chapter-15.md) | AI Conversation Examples | ⏳ Queued |
-| [Ch 16](docs/Chapter-16.md) | Future Roadmap | ⏳ Queued |
+| [Ch 01 — Physical Infrastructure](docs/Chapter-01-Physical-Infrastructure.md) | Physical Infrastructure | ✅ Complete |
+| [Ch 02 — Sensor Layer](docs/Chapter-02-Sensor-Layer.md) | Sensor Layer | ✅ Complete |
+| [Ch 03 — Vision System](docs/Chapter-03-Vision-System.md) | Vision System | ✅ Complete |
+| [Ch 04 — Audio System](docs/Chapter-04-Audio-System.md) | Audio System | ✅ Complete |
+| [Ch 05 — Identity System](docs/Chapter-05-Identity-System.md) | Identity System | ✅ Complete |
+| [Ch 06 — Memory System](docs/Chapter-06-Memory-System.md) | Memory System | ✅ Complete |
+| [Ch 07 — AI Reasoning Engine](docs/Chapter-07-AI-Reasoning-Engine.md) | AI Reasoning Engine | ✅ Complete |
+| [Ch 08 — Context Engine](docs/Chapter-08-Context-Engine.md) | Context Engine | ✅ Complete |
+| [Ch 09 — Automation Engine](docs/Chapter-09-Automation-Engine.md) | Automation Engine | ✅ Complete |
+| [Ch 10 — Energy Intelligence](docs/Chapter-10-Energy-Intelligence.md) | Energy Intelligence | ✅ Complete |
+| [Ch 11 — Security Architecture](docs/Chapter-11-Security-Architecture.md) | Security Architecture | ✅ Complete |
+| [Ch 12 — API & Integration Layer](docs/Chapter-12-API-and-Integration-Layer.md) | API & Integration Layer | ✅ Complete |
+| [Ch 13 — Mobile Application](docs/Chapter-13-Mobile-Application.md) | Mobile Application | ✅ Complete |
+| [Ch 14 — Wall Panels](docs/Chapter-14-Wall-Panels.md) | Wall Panels | ✅ Complete |
+| [Ch 15 — AI Conversation Examples](docs/Chapter-15-AI-Conversation-Examples.md) | AI Conversation Examples | ✅ Complete |
+| [Ch 16 — Future Roadmap](docs/Chapter-16-Future-Roadmap.md) | Future Roadmap | ✅ Complete |
 
 ---
 

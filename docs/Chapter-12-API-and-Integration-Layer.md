@@ -2071,8 +2071,8 @@ SELECT create_hypertable('api_request_log', 'timestamp',
 
 ---
 
-*Previous: [Chapter 11 — Security Architecture](Chapter-11.md)*  
-*Next: [Chapter 13 — Mobile Application](Chapter-13.md)*
+*Previous: [Chapter 11 — Security Architecture](Chapter-11-Security-Architecture.md)*  
+*Next: [Chapter 13 — Mobile Application](Chapter-13-Mobile-Application.md)*
 
 ---
 

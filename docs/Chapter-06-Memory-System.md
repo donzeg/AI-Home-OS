@@ -1539,8 +1539,8 @@ CREATE TABLE procedural_routines (
 
 ---
 
-*Previous: [Chapter 05 — Identity System](Chapter-05.md)*  
-*Next: [Chapter 07 — AI Reasoning Engine](Chapter-07.md)*
+*Previous: [Chapter 05 — Identity System](Chapter-05-Identity-System.md)*  
+*Next: [Chapter 07 — AI Reasoning Engine](Chapter-07-AI-Reasoning-Engine.md)*
 
 ---
 

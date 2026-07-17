@@ -1561,8 +1561,8 @@ class ActionQueue:
 
 ---
 
-*Previous: [Chapter 08 — Context Engine](Chapter-08.md)*  
-*Next: [Chapter 10 — Energy Intelligence](Chapter-10.md)*
+*Previous: [Chapter 08 — Context Engine](Chapter-08-Context-Engine.md)*  
+*Next: [Chapter 10 — Energy Intelligence](Chapter-10-Energy-Intelligence.md)*
 
 ---
 

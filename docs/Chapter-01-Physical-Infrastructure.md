@@ -1496,7 +1496,7 @@ flowchart TD
 
 ---
 
-*Next: [Chapter 02 — Sensor Layer](Chapter-02.md)*
+*Next: [Chapter 02 — Sensor Layer](Chapter-02-Sensor-Layer.md)*
 
 ---
 

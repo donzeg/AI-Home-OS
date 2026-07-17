@@ -1776,8 +1776,8 @@ Want me to add it to your shopping list?"
 
 ---
 
-*Previous: [Chapter 14 — Wall Panels](Chapter-14.md)*  
-*Next: [Chapter 16 — Future Roadmap](Chapter-16.md)*
+*Previous: [Chapter 14 — Wall Panels](Chapter-14-Wall-Panels.md)*  
+*Next: [Chapter 16 — Future Roadmap](Chapter-16-Future-Roadmap.md)*
 
 ---
 

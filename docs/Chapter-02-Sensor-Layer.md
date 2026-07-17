@@ -1784,8 +1784,8 @@ There is a strong temptation to minimize sensor count to reduce cost and complex
 
 ---
 
-*Previous: [Chapter 01 — Physical Infrastructure](Chapter-01.md)*  
-*Next: [Chapter 03 — Vision System](Chapter-03.md)*
+*Previous: [Chapter 01 — Physical Infrastructure](Chapter-01-Physical-Infrastructure.md)*  
+*Next: [Chapter 03 — Vision System](Chapter-03-Vision-System.md)*
 
 ---
 

@@ -1934,8 +1934,8 @@ Per project requirements, all UI colours are solid. This enforces:
 
 ---
 
-*Previous: [Chapter 12 — API & Integration Layer](Chapter-12.md)*  
-*Next: [Chapter 14 — Wall Panels](Chapter-14.md)*
+*Previous: [Chapter 12 — API & Integration Layer](Chapter-12-API-and-Integration-Layer.md)*  
+*Next: [Chapter 14 — Wall Panels](Chapter-14-Wall-Panels.md)*
 
 ---
 

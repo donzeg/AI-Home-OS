@@ -1650,8 +1650,8 @@ Some rooms (bedroom, bathroom) might prefer a voice-only interface with no scree
 
 ---
 
-*Previous: [Chapter 13 — Mobile Application](Chapter-13.md)*  
-*Next: [Chapter 15 — AI Conversation Examples](Chapter-15.md)*
+*Previous: [Chapter 13 — Mobile Application](Chapter-13-Mobile-Application.md)*  
+*Next: [Chapter 15 — AI Conversation Examples](Chapter-15-AI-Conversation-Examples.md)*
 
 ---
 

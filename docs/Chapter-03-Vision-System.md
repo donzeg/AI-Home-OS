@@ -1651,8 +1651,8 @@ class VisionEventHandler:
 
 ---
 
-*Previous: [Chapter 02 — Sensor Layer](Chapter-02.md)*  
-*Next: [Chapter 04 — Audio System](Chapter-04.md)*
+*Previous: [Chapter 02 — Sensor Layer](Chapter-02-Sensor-Layer.md)*  
+*Next: [Chapter 04 — Audio System](Chapter-04-Audio-System.md)*
 
 ---
 

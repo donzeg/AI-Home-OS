@@ -1465,8 +1465,8 @@ ALTER TABLE context_history SET (
 
 ---
 
-*Previous: [Chapter 07 — AI Reasoning Engine](Chapter-07.md)*  
-*Next: [Chapter 09 — Automation Engine](Chapter-09.md)*
+*Previous: [Chapter 07 — AI Reasoning Engine](Chapter-07-AI-Reasoning-Engine.md)*  
+*Next: [Chapter 09 — Automation Engine](Chapter-09-Automation-Engine.md)*
 
 ---
 

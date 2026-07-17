@@ -1829,8 +1829,8 @@ Let's Encrypt requires a public domain or ACME DNS challenge. Internal services 
 
 ---
 
-*Previous: [Chapter 10 — Energy Intelligence](Chapter-10.md)*  
-*Next: [Chapter 12 — API & Integration Layer](Chapter-12.md)*
+*Previous: [Chapter 10 — Energy Intelligence](Chapter-10-Energy-Intelligence.md)*  
+*Next: [Chapter 12 — API & Integration Layer](Chapter-12-API-and-Integration-Layer.md)*
 
 ---
 
