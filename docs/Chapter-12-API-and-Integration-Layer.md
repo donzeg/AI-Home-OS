@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -37,11 +39,11 @@
 
 ## 1. Overview
 
-The API & Integration Layer is the **nervous system** of AI Home OS — connecting the AI reasoning engine, sensor layer, Home Assistant, mobile app, wall panels, third-party services, and external automations into a unified, coherent platform.
+The API & Integration Layer is the **nervous system** of the backend-first AI Home OS platform — connecting the AI reasoning engine, sensor layer, Home Assistant, administration web application, mobile app, wall panels, third-party services, and external automations into a unified, coherent platform. Chapter 17 defines the application and deployment boundaries.
 
 The layer provides:
 
-- A **REST API** for the mobile app, wall panels, and external integrations
+- A **REST API** for the administration web application, mobile app, wall panels, and external integrations
 - A **WebSocket API** for real-time push events (state changes, alerts, notifications)
 - An **MQTT bus** for all internal IoT and service-to-service messaging
 - A **Home Assistant bridge** that translates between AI Home OS and HA's native APIs
@@ -68,7 +70,7 @@ The layer provides:
 flowchart TD
     subgraph CLIENTS["API Clients"]
         MOB["Mobile App\n(iOS / Android)"]
-        PANEL["Wall Panels\n(React touchscreen)"]
+        PANEL["Wall Panels\n(Flutter Web touchscreen)"]
         ADMIN["Admin UI\n(Grafana / web)"]
         EXT["External Systems\n(Webhooks, IFTTT)"]
         CLI["Developer CLI\n(aihos-cli)"]
@@ -78,6 +80,7 @@ flowchart TD
         CADDY["Caddy\n(TLS termination)"]
         GATEWAY["API Gateway\n(FastAPI — port 8080)"]
         WS["WebSocket Hub\n(port 8081)"]
+        LIVEKIT["Self-hosted LiveKit\nWebRTC media plane"]
     end
 
     subgraph INTERNAL["Internal APIs"]
@@ -86,6 +89,7 @@ flowchart TD
         ENERGY_SVC["Energy Service\n(gRPC port 50052)"]
         IDENTITY_SVC["Identity Service\n(gRPC port 50053)"]
         MEMORY_SVC["Memory Service\n(gRPC port 50054)"]
+        MEDIA_AGENT["Conversation Media Participant\n(local agent process)"]
     end
 
     subgraph EXTERNAL["External Integrations"]
@@ -93,6 +97,7 @@ flowchart TD
         WEATHER["Open-Meteo\n(Weather forecast)"]
         TIBBER["Tibber\n(Dynamic tariffs)"]
         UTIL["Utility\n(Demand response)"]
+        ELEVEN["ElevenLabs\n(optional cloud TTS)"]
     end
 
     MOB --> CADDY
@@ -103,12 +108,17 @@ flowchart TD
 
     CADDY --> GATEWAY
     CADDY --> WS
+    CADDY --> LIVEKIT
 
     GATEWAY --> HA_BRIDGE
     GATEWAY --> AI_ENGINE
     GATEWAY --> ENERGY_SVC
     GATEWAY --> IDENTITY_SVC
     GATEWAY --> MEMORY_SVC
+    LIVEKIT <--> MEDIA_AGENT
+    MEDIA_AGENT --> AI_ENGINE
+    AI_ENGINE -. "consent-gated response text" .-> ELEVEN
+    ELEVEN -. "streamed speech" .-> MEDIA_AGENT
 
     GATEWAY --> GOOGLE
     GATEWAY --> WEATHER
@@ -333,6 +343,8 @@ POST   /v1/security/alarm/disarm         → disarm alarm (MFA required)
 GET    /v1/audit-log?from=&to=&type=    → audit log query
 ```
 
+These endpoints do not implement independent security rules. All camera access, alarm control, exterior lock/gate control, credential management, and security-setting changes call the Authoritative Sensitive Action Policy in Chapter 11, Section 5.4. Internal services and plugins use the same gateway and cannot call Home Assistant directly for a sensitive action.
+
 ---
 
 ### 3.3 Standard Response Envelope
@@ -400,8 +412,13 @@ The WebSocket API provides real-time push events without polling. The mobile app
 ws://api.home.local/v1/ws
 wss://api.yourdomain.com/v1/ws  (external, via Caddy)
 
-Authentication: JWT in query param (WebSocket protocol limitation)
-  wss://api.yourdomain.com/v1/ws?token=eyJhbGc...
+Authentication:
+  1. Client uses its bearer token over HTTPS to POST /v1/ws/tickets.
+  2. Server returns an opaque, audience-bound, single-use ticket with a
+     maximum lifetime of 30 seconds.
+  3. Client connects to wss://api.yourdomain.com/v1/ws?ticket=<opaque-ticket>.
+  4. The WebSocket gateway atomically consumes the ticket before accepting
+     subscriptions. An expired, reused, or wrong-audience ticket is rejected.
 
 After connection, client sends subscription message:
 {
@@ -409,6 +426,8 @@ After connection, client sends subscription message:
   "channels": ["devices", "presence", "alerts", "energy"]
 }
 ```
+
+Long-lived access and refresh tokens must never appear in a WebSocket URL. Ticket values are redacted from proxy, gateway, application, analytics, and error logs. A reconnect obtains a new ticket; tickets are never retried or reused. Production connections use `wss://`; cleartext `ws://` is permitted only on explicitly trusted local development networks.
 
 ### 4.2 WebSocket Event Schema
 
@@ -470,9 +489,9 @@ class WebSocketManager:
         self.subscriptions: Dict[str, Set[WebSocket]] = defaultdict(set)
         self.connections: Dict[str, WebSocket] = {}  # connection_id → ws
 
-    async def connect(self, ws: WebSocket, token: str) -> str:
-        person = await auth.verify_token(token)
-        if not person:
+    async def connect(self, ws: WebSocket, ticket: str) -> str:
+        grant = await ws_ticket_store.consume(ticket, audience='events')
+        if not grant:
             await ws.close(code=4001)
             return None
 
@@ -484,7 +503,7 @@ class WebSocketManager:
         await ws.send_json({
             'type': 'connected',
             'connection_id': conn_id,
-            'person': person.name,
+            'principal_id': grant.principal_id,
         })
 
         return conn_id
@@ -528,7 +547,7 @@ class WebSocketManager:
 
 ```python
 async def ws_endpoint(websocket: WebSocket):
-    conn_id = await ws_manager.connect(websocket, token=...)
+    conn_id = await ws_manager.connect(websocket, ticket=...)
 
     async def heartbeat():
         while True:
@@ -548,7 +567,8 @@ async def ws_endpoint(websocket: WebSocket):
             elif data['type'] == 'subscribe':
                 await ws_manager.subscribe(conn_id, data['channels'])
             elif data['type'] == 'command':
-                # Allow voice commands via WebSocket (wall panel mic)
+                # Structured text/control requests only. Conversational audio
+                # uses the LiveKit media plane in Section 4.5.
                 await command_router.handle_ws_command(conn_id, data)
     except Exception:
         pass
@@ -556,6 +576,40 @@ async def ws_endpoint(websocket: WebSocket):
         heartbeat_task.cancel()
         await ws_manager.disconnect(conn_id)
 ```
+
+### 4.5 LiveKit Conversational Media Plane
+
+The `/v1/ws` connection remains the control and event plane for device state, alerts, energy, presence, and structured commands. Conversational audio uses a separate self-hosted LiveKit WebRTC media plane. This separation keeps binary audio, network adaptation, interruption, and turn-taking out of the general event socket.
+
+```mermaid
+sequenceDiagram
+    participant C as Mobile / panel client
+    participant A as AI Home OS API
+    participant L as Self-hosted LiveKit
+    participant M as Local media participant
+    participant R as Reasoning and policy services
+    participant T as TTS provider router
+
+    C->>A: POST /v1/voice/sessions
+    A->>A: Authenticate user and authorize device/session
+    A-->>C: LiveKit URL, opaque room ID, short-lived room token
+    C->>L: Join room over WebRTC
+    M->>L: Join same room with service grant
+    C->>M: Post-activation audio track
+    M->>R: Local STT transcript plus authenticated session context
+    R->>R: Reasoning, tool policy, audit, Sensitive Action Gateway where required
+    R->>T: Approved response text and speech policy
+    T-->>M: Local or explicitly approved cloud audio stream
+    M-->>C: Assistant audio track and transcript events
+```
+
+`POST /v1/voice/sessions` returns a short-lived LiveKit token containing the minimum room, participant, publish, and subscribe grants. The API derives identity and permissions from the authenticated session; clients cannot choose another principal, home, room, or service role. Room and participant identifiers are opaque. The token is held in memory for that session, never stored in analytics or written to logs, and cannot authorize a different room or participant. Session revocation removes the participant and prevents token refresh. Transport-level reconnect may resume the same authorized session but cannot create a new one.
+
+The local media participant may publish assistant audio and transcript/status data and subscribe to the authorized user audio track. It receives no Home Assistant credential and no direct command-bus access. Transcripts enter the normal command router, and all resulting actions use the same authorization and Sensitive Action Gateway rules as REST, event WebSocket, wall-panel, and room-satellite requests.
+
+Default self-hosted deployment disables recording, composite egress, ingress, SIP, and external room export. Each of those capabilities requires a separate threat model, authorization rule, retention decision, consent record, and audit event before activation. A LiveKit outage affects interactive remote sessions only; local room audio, Snapcast announcements, and the independent safety controller continue without it.
+
+Before implementation is accepted, tests must demonstrate room isolation, least-privilege grants, token expiry and revocation, inability to impersonate the media participant, denial of unauthorized track publication/subscription, interruption behavior, network recovery without duplicate commands, and continued local alert delivery when LiveKit is stopped.
 
 ---
 
@@ -675,35 +729,31 @@ class HABridge:
 
     # ── Direction 1: AI → HA (command execution) ──────────────────────
 
-    async def call_service(
-        self,
-        domain: str,
-        service: str,
-        entity_id: str,
-        **kwargs
-    ) -> dict:
+    async def execute(self, command: HACommand) -> CommandOutcome:
         """
-        Call a HA service. Retries 3× with exponential backoff.
-        Queues to Redis if HA is offline (offline-resilient).
+        Execute immediately when possible. If HA remains unavailable, delegate
+        to the command's explicit delivery policy. The bridge never decides on
+        its own that a physical action is safe to delay.
         """
-        payload = {'entity_id': entity_id, **kwargs}
-        url = f"{self.ha_url}/api/services/{domain}/{service}"
-
         for attempt in range(3):
             try:
-                async with self.session.post(url, json=payload) as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-                    elif resp.status == 401:
-                        raise AuthError("HA token invalid or expired")
-                    else:
-                        raise HAError(f"HA returned {resp.status}")
+                result = await self.execute_now(command)
+                return CommandOutcome.executed(command.command_id, result)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt == 2:
-                    # Queue for retry when HA comes back online
-                    await self._queue_for_retry(domain, service, entity_id, kwargs)
-                    raise HAUnavailableError("HA offline — command queued") from e
+                    return await retry_queue.handle_unavailable(command)
                 await asyncio.sleep(2 ** attempt)
+
+    async def execute_now(self, command: HACommand) -> dict:
+        """Execute once without enqueuing; used by the retry dispatcher."""
+        payload = {'entity_id': command.entity_id, **command.arguments}
+        url = f"{self.ha_url}/api/services/{command.domain}/{command.service}"
+        async with self.session.post(url, json=payload) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            if resp.status == 401:
+                raise AuthError("HA token invalid or expired")
+            raise HAError(f"HA returned {resp.status}")
 
     async def get_state(self, entity_id: str) -> dict:
         """Get current state of an entity."""
@@ -777,38 +827,184 @@ class HABridge:
 
 ### 6.2 Offline Retry Queue
 
+Offline handling is part of each command's safety contract. There is no universal retry window, and security-sensitive physical actions never enter the general retry queue.
+
+| Delivery policy | Typical actions | Behavior while HA is offline |
+|-----------------|-----------------|------------------------------|
+| `NEVER_QUEUE` | Unlock, alarm disarm, garage/gate open, disable safety device | Fail immediately; require a new authenticated request |
+| `IMMEDIATE_ONLY` | Media control, spoken response, transient scene | Fail when the short command deadline passes |
+| `LATEST_STATE` | Target temperature, brightness, blind position | Keep only the newest unexpired desired state per coalescing key |
+| `DURABLE_EVENT` | Audit record, non-sensitive notification | Queue with expiry and idempotency |
+| `SAFETY_LOCAL` | Smoke response, water shutoff | Route to an independent local safety controller; never defer to this queue |
+
 ```python
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+import time
+
+class DeliveryPolicy(str, Enum):
+    NEVER_QUEUE = 'never_queue'
+    IMMEDIATE_ONLY = 'immediate_only'
+    LATEST_STATE = 'latest_state'
+    DURABLE_EVENT = 'durable_event'
+    SAFETY_LOCAL = 'safety_local'
+
+@dataclass(frozen=True)
+class HACommand:
+    command_id: str
+    domain: str
+    service: str
+    entity_id: str
+    arguments: dict
+    delivery_policy: DeliveryPolicy
+    created_at: float
+    expires_at: float
+    principal_id: str
+    authorization_grant_id: str
+    required_permission: str
+    required_authentication_age_seconds: Optional[int]
+    preconditions: dict
+    coalescing_key: Optional[str] = None
+
+# These actions are rejected even if a caller mistakenly labels them queueable.
+NEVER_DEFER_ACTIONS = {
+    ('lock', 'unlock'),
+    ('alarm_control_panel', 'alarm_disarm'),
+    ('cover', 'open_cover'),       # garage doors and vehicle gates
+    ('switch', 'turn_off_safety'),
+}
+
 class HARetryQueue:
-    """
-    When HA is offline, queue commands to Redis.
-    Flush when HA comes back online.
-    """
-    QUEUE_KEY = 'ha:retry_queue'
-    MAX_QUEUE_SIZE = 500
+    async def reject_before_queue(self, command, reason) -> CommandOutcome:
+        outcome = CommandOutcome.rejected(command.command_id, reason)
+        await outcomes.record_completed(outcome)
+        await notifications.send_command_outcome(outcome)
+        return outcome
 
-    async def enqueue(self, command: dict):
-        queue_size = await redis.llen(self.QUEUE_KEY)
-        if queue_size >= self.MAX_QUEUE_SIZE:
-            # Drop oldest item (ring buffer)
-            await redis.lpop(self.QUEUE_KEY)
+    async def handle_unavailable(self, command: HACommand) -> CommandOutcome:
+        # Policy comes from a centrally maintained action registry. A caller
+        # cannot make a dangerous action queueable by changing this field.
+        registered_policy = command_policy.for_action(
+            command.domain, command.service, command.entity_id
+        )
+        if not registered_policy:
+            return await self.reject_before_queue(command, 'unregistered_action')
+        if command.delivery_policy != registered_policy.delivery_policy:
+            return await self.reject_before_queue(command, 'policy_mismatch')
 
-        await redis.rpush(self.QUEUE_KEY, json.dumps({
-            **command,
-            'queued_at': datetime.utcnow().isoformat()
-        }))
+        if (command.domain, command.service) in NEVER_DEFER_ACTIONS:
+            return await self.reject_before_queue(command, 'unsafe_to_queue')
 
-    async def flush(self):
-        """Called when HA comes back online."""
-        while True:
-            item = await redis.lpop(self.QUEUE_KEY)
-            if not item:
-                break
-            cmd = json.loads(item)
-            # Skip commands older than 10 minutes (stale)
-            queued_at = datetime.fromisoformat(cmd['queued_at'])
-            if (datetime.utcnow() - queued_at).total_seconds() < 600:
-                await ha_bridge.call_service(**cmd)
+        if command.delivery_policy == DeliveryPolicy.NEVER_QUEUE:
+            return await self.reject_before_queue(command, 'not_queued')
+
+        if command.delivery_policy == DeliveryPolicy.SAFETY_LOCAL:
+            return await local_safety_controller.execute(command)
+
+        if command.expires_at <= time.time():
+            return await self.reject_before_queue(command, 'expired')
+
+        if command.delivery_policy == DeliveryPolicy.IMMEDIATE_ONLY:
+            return await self.reject_before_queue(command, 'deadline_missed')
+
+        # A crash can occur after HA performs an action but before the worker
+        # stores the result. Only naturally idempotent state assignments, or
+        # operations whose receiver honors command_id as an idempotency key,
+        # may be retried across that boundary.
+        if not registered_policy.retry_safe:
+            return await self.reject_before_queue(command, 'unsafe_to_retry')
+
+        if command.delivery_policy == DeliveryPolicy.LATEST_STATE:
+            if not command.coalescing_key:
+                return await self.reject_before_queue(
+                    command, 'missing_coalescing_key'
+                )
+            superseded_ids = await queue_store.replace_latest(command)
+            for command_id in superseded_ids:
+                await outcomes.record(command_id, 'superseded')
+        elif command.delivery_policy == DeliveryPolicy.DURABLE_EVENT:
+            await queue_store.enqueue(command)
+        else:
+            return await self.reject_before_queue(
+                command, 'unknown_delivery_policy'
+            )
+
+        await outcomes.record(command.command_id, 'queued')
+        return CommandOutcome.queued(command.command_id)
+
+    async def dispatch_next(self) -> Optional[CommandOutcome]:
+        # claim_next atomically moves one item from pending to processing and
+        # gives it a visibility timeout. An abandoned claim is recoverable.
+        command = await queue_store.claim_next()
+        if not command:
+            return None
+
+        try:
+            previous = await outcomes.completed_result(command.command_id)
+            if previous:
+                await queue_store.ack(command.command_id)
+                return previous
+
+            if command.expires_at <= time.time():
+                return await self.reject(command, 'expired')
+
+            # Re-evaluate current authorization instead of trusting the
+            # authorization decision made before the outage.
+            authorization = await authz.revalidate(
+                principal_id=command.principal_id,
+                grant_id=command.authorization_grant_id,
+                required_permission=command.required_permission,
+                max_authentication_age=(
+                    command.required_authentication_age_seconds
+                ),
+            )
+            if not authorization.allowed:
+                return await self.reject(command, authorization.reason)
+
+            current_state = await ha_bridge.get_state(command.entity_id)
+            if not preconditions_match(command.preconditions, current_state):
+                return await self.reject(command, 'precondition_failed')
+
+            result = await ha_bridge.execute_now(command)
+            outcome = CommandOutcome.executed(command.command_id, result)
+            # Persist the result before acknowledging the queue item.
+            await outcomes.record_completed(outcome)
+            await queue_store.ack(command.command_id)
+            await notifications.send_command_outcome(outcome)
+            return outcome
+        except TransientHAError:
+            await queue_store.release(command.command_id)
+            raise
+
+    async def reject(self, command, reason) -> CommandOutcome:
+        outcome = CommandOutcome.rejected(command.command_id, reason)
+        await outcomes.record_completed(outcome)
+        await queue_store.ack(command.command_id)
+        await notifications.send_command_outcome(outcome)
+        return outcome
 ```
+
+`queue_store` uses a reliable pending/processing design such as Redis Streams consumer groups. A worker claim has a visibility timeout, so another worker can recover it after a crash. Queue capacity limits reject new work explicitly; they never silently discard the oldest command.
+
+The action-policy registry is authoritative and deny-by-default. Callers cannot choose a weaker delivery policy. Delayed physical commands must be naturally idempotent state assignments, such as setting a target temperature, or the downstream receiver must enforce `command_id` as an idempotency key. Non-idempotent actions are rejected because a crash after physical execution but before result persistence cannot otherwise provide an exactly-once guarantee.
+
+For `LATEST_STATE`, the coalescing key is the controlled property, for example `climate:master_bedroom:target_temperature`. Replacing a pending command marks the older command `superseded`. Commands with different safety or authorization contexts must not share a coalescing key.
+
+Every request ends with an observable outcome: `executed`, `queued`, `expired`, `superseded`, `authorization_revoked`, `authentication_stale`, `precondition_failed`, `unregistered_action`, `policy_mismatch`, `unsafe_to_queue`, `unsafe_to_retry`, or `execution_failed`. The requesting interface receives the final outcome rather than assuming that a queued command succeeded.
+
+#### 6.2.1 Validation Requirements
+
+Before deployment, offline command handling must demonstrate that:
+
+1. Unlock, alarm disarm, garage/gate open, and safety-disable commands never enter the retry queue.
+2. Each queued command has an explicit policy and deadline; unknown policies are rejected.
+3. Revoked permission and stale authentication prevent dispatch after reconnection.
+4. Changed device or household state causes failed preconditions rather than delayed execution.
+5. Multiple desired-state updates execute only the newest unexpired state.
+6. Worker failure after claiming an item does not lose it; all retried physical actions are idempotent, and non-idempotent actions never enter the queue without receiver-enforced idempotency.
+7. Repeated delivery of a completed `command_id` returns its stored result without repeating the action.
+8. Every dropped, rejected, expired, superseded, failed, or executed request produces an audit record and user-visible outcome.
 
 ---
 
@@ -839,25 +1035,55 @@ class InboundWebhookRouter:
 
         handler = self.REGISTERED_SOURCES[source]
 
-        # Verify signature (HMAC-SHA256 from shared secret)
-        if not await handler.verify_signature(request):
+        raw_body = await request.body()
+        event_id = request.headers.get('X-Webhook-Id')
+        timestamp = request.headers.get('X-Webhook-Timestamp')
+        signature = request.headers.get('X-Webhook-Signature')
+
+        # Signature input is: source + timestamp + event_id + raw request body.
+        # Comparison is constant-time and the source has a separately managed key.
+        if not event_id or not timestamp or not signature or not await handler.verify_signature(
+            source=source,
+            timestamp=timestamp,
+            event_id=event_id,
+            raw_body=raw_body,
+            signature=signature,
+        ):
             audit_log.record('webhook_signature_invalid', source=source,
                              ip=request.client.host)
             return Response("Invalid signature", status_code=401)
 
-        payload = await request.json()
+        # Reject captured requests outside the narrow replay window.
+        if not webhook_clock.within_window(timestamp, maximum_age_seconds=300):
+            audit_log.record('webhook_expired', source=source, event_id=event_id)
+            return Response("Expired webhook", status_code=401)
 
         # Validate payload schema
         try:
+            payload = json.loads(raw_body)
             validated = handler.schema.parse_obj(payload)
-        except ValidationError as e:
+        except (JSONDecodeError, ValidationError) as e:
             return Response(f"Invalid payload: {e}", status_code=422)
 
-        # Route to appropriate system component
-        await handler.process(validated)
+        # Atomically claim the validated provider event before any side effect.
+        # The durable store is keyed by (source, event_id) and retains records
+        # beyond the provider's documented retry period.
+        claim = await webhook_events.claim(source, event_id, timestamp)
+        if not claim.acquired:
+            return Response(status_code=claim.previous_http_status or 202)
+
+        # Handlers use (source, event_id) as the idempotency key for every
+        # downstream side effect. A worker resumes an incomplete durable claim;
+        # it never starts a second independent execution.
+        await handler.process(validated, idempotency_key=f'{source}:{event_id}')
+        await webhook_events.complete(source, event_id, http_status=200)
 
         return Response(status_code=200)
 ```
+
+Webhook keys are rotated independently per source. Providers with a native signature format may use their documented canonicalization scheme, but they must provide equivalent authenticated timestamp and event-identity guarantees. If a provider supplies no replay-resistant identifier, the gateway derives a bounded deduplication key from the verified raw payload and timestamp bucket and restricts that integration to idempotent handlers.
+
+Before deployment, tests must show that an altered body fails verification, expired requests are rejected, the same event ID cannot execute twice under concurrent delivery, a worker can resume an incomplete claim, and retries return the stored outcome without repeating downstream effects.
 
 ### 7.2 Inbound Webhook Handlers
 
@@ -865,25 +1091,42 @@ class InboundWebhookRouter:
 class GoogleCalendarHandler(WebhookHandler):
     schema = GoogleCalendarEvent
 
-    async def process(self, event: GoogleCalendarEvent):
-        # Sync calendar events to AI context
+    async def process(self, event: GoogleCalendarEvent, idempotency_key: str):
+        # Calendar fields and attendees are untrusted external context even
+        # though the provider webhook itself has been authenticated.
         if event.type == 'event.created':
             await context_client.add_calendar_event(
                 title=event.summary,
                 start=event.start,
                 end=event.end,
                 location=event.location,
-                attendees=event.attendees
+                attendees=event.attendees,
+                idempotency_key=idempotency_key,
             )
-            # Pre-configure home for the event
+
             if 'guest' in event.summary.lower() or len(event.attendees) > 2:
-                await automation_engine.schedule(
-                    trigger_time=event.start - timedelta(minutes=30),
-                    action='activate_guest_mode'
+                decision = await calendar_policy.evaluate_guest_mode(
+                    calendar_id=event.calendar_id,
+                    organizer=event.organizer,
+                    event_id=event.id,
                 )
 
+                if decision.matches_active_user_rule:
+                    await automation_engine.schedule(
+                        trigger_time=event.start - timedelta(minutes=30),
+                        expires_at=event.end,
+                        action='activate_guest_mode',
+                        policy_id=decision.policy_id,
+                        idempotency_key=f'{idempotency_key}:guest-mode',
+                    )
+                else:
+                    await notifications.suggest_guest_mode(
+                        event_id=event.id,
+                        expires_at=event.start,
+                    )
+
 class WeatherAlertHandler(WebhookHandler):
-    async def process(self, alert: WeatherAlert):
+    async def process(self, alert: WeatherAlert, idempotency_key: str):
         if alert.severity in ('severe', 'extreme'):
             await energy_service.set_battery_reserve(90)
             await tts_service.announce_all_rooms(
@@ -1201,16 +1444,20 @@ class XYZIntegrationPlugin(AIHOSPlugin):
 plugin = XYZIntegrationPlugin()
 ```
 
-### 9.3 Plugin Security Sandbox
+### 9.3 Plugin Trust Boundary and Capability Context
+
+The capability wrappers below reduce accidental access and provide policy enforcement for **trusted first-party plugins**. They are not a sandbox: Python code running in the API process can attempt direct filesystem, network, environment, import, and process-memory access. Only reviewed code signed by an approved first-party key may run in-process.
 
 ```python
-class PluginSandbox:
+class TrustedPluginContextFactory:
     """
-    Plugins run in a restricted environment.
-    They cannot access resources outside their declared permissions.
+    Construct audited, least-privilege service clients for a reviewed and
+    signed first-party plugin. This is not an isolation boundary.
     """
 
     def create_context(self, plugin: PluginManifest) -> PluginContext:
+        trusted_plugin_registry.require_approved_signature(plugin)
+
         # Create scoped MQTT client (only allowed topics)
         mqtt_client = ScopedMQTTClient(
             allowed_subscribe=plugin.permissions.get('mqtt.subscribe', []),
@@ -1236,6 +1483,8 @@ class PluginSandbox:
             logger=PluginLogger(plugin.name)
         )
 ```
+
+Third-party and community plugins must execute outside the API process using a supported isolation boundary such as a dedicated container, restricted subprocess, or WASM runtime. The boundary must use a separate operating-system identity, read-only code and root filesystem, explicit resource limits, no host socket or secret mounts, a deny-by-default network policy, and a narrow authenticated broker API. The broker rechecks declared capabilities and routes every sensitive action through the Chapter 11 Sensitive Action Gateway. Until that isolated runtime and its escape tests exist, third-party plugin installation is disabled.
 
 ---
 
@@ -1743,41 +1992,182 @@ class ReasoningClient:
 
 ## 17. Integration Adapters
 
-### 17.1 Voice Assistant Fallback Adapter
+### 17.1 Optional Cloud Speech Adapter
 
-When local voice processing fails, a fallback to cloud can be optionally enabled (user must explicitly opt in):
+Cloud speech recognition is disabled by default and is never an automatic consequence of local STT failure. The caller must present a current, feature-specific consent reference and enough session context for the privacy policy to authorize this transmission.
 
 ```python
-class CloudVoiceFallbackAdapter(IntegrationAdapter):
+class CloudSpeechAdapter(IntegrationAdapter):
     """
-    Optional fallback to Google/Azure Speech when local STT fails.
-    Disabled by default. User must opt in explicitly.
-    Strips personally identifiable context before sending.
+    Optional cloud STT for a single configured provider.
+    Raw speech remains personal and biometric data after metadata removal.
     """
-    name = 'cloud_voice_fallback'
+    name = 'cloud_speech'
     requires_internet = True
 
-    async def transcribe(self, audio_bytes: bytes) -> Optional[str]:
+    async def transcribe(
+        self,
+        captured_audio: CapturedAudio,
+        context: AudioPrivacyContext,
+    ) -> CloudSpeechResult:
         if not self.config.get('enabled', False):
-            return None
+            return CloudSpeechResult.local_only('cloud_stt_disabled')
 
-        # Strip any metadata — send only raw audio
-        sanitised_audio = self._strip_metadata(audio_bytes)
+        # Authorization checks feature-specific consent, provider, purpose,
+        # room, identified speakers, child/guardian policy, and consent expiry.
+        decision = await privacy_policy.authorize_audio_egress(
+            feature='cloud_stt',
+            provider=self.config['provider'],
+            consent_id=context.cloud_stt_consent_id,
+            room_id=context.room_id,
+            speaker_ids=context.speaker_ids,
+            guest_mode=context.guest_mode,
+            purpose='speech_transcription',
+        )
+        if not decision.allowed:
+            await privacy_audit.record_denial(decision, context)
+            return CloudSpeechResult.local_only(decision.reason)
+
+        if (
+            context.has_unknown_speaker
+            or context.has_unapproved_child
+            or context.has_mixed_consent
+        ):
+            return CloudSpeechResult.local_only('speaker_consent_not_resolved')
+
+        # Include only post-activation speech. Metadata removal minimizes data
+        # but does not anonymize a person's voice or spoken content.
+        audio_segment = captured_audio.post_activation_only()
+        audio_segment.trim_silence()
+        audio_segment.exclude_wake_word_preroll()
+        if not audio_segment.within_limits(
+            max_seconds=self.config['max_audio_seconds'],
+            max_bytes=self.config['max_audio_bytes'],
+        ):
+            audio_segment.discard()
+            return CloudSpeechResult.local_only('audio_limit_exceeded')
+
+        # The visible indicator must be active before any network transmission.
+        indicator = await privacy_indicators.begin_cloud_processing(
+            room_id=context.room_id,
+            provider=self.config['provider'],
+            data_type='command_audio',
+        )
+        if not indicator.confirmed:
+            audio_segment.discard()
+            return CloudSpeechResult.local_only('privacy_indicator_failed')
+
+        request_id = await privacy_audit.record_egress_start(
+            feature='cloud_stt',
+            provider=self.config['provider'],
+            consent_id=decision.consent_id,
+            room_id=context.room_id,
+            data_category='post_activation_command_audio',
+        )
 
         try:
-            client = speech.SpeechClient()
-            response = client.recognize(
+            # Provider is selected in advance. Failure does not trigger another
+            # provider. Retention/training controls are verified at setup.
+            response = await self.configured_provider.recognize(
                 config=speech.RecognitionConfig(
                     encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                     sample_rate_hertz=16000,
-                    language_code="en-US",
+                    language_code=context.language_code,
                 ),
-                audio=speech.RecognitionAudio(content=sanitised_audio)
+                audio=audio_segment.bytes(),
+                request_id=request_id,
             )
-            return response.results[0].alternatives[0].transcript
-        except Exception:
-            return None
+            await privacy_audit.record_egress_complete(request_id, 'success')
+            return CloudSpeechResult.transcribed(response.transcript)
+        except ProviderError:
+            await privacy_audit.record_egress_complete(request_id, 'failed')
+            return CloudSpeechResult.local_only('selected_provider_failed')
+        finally:
+            audio_segment.discard()
+            await privacy_indicators.end_cloud_processing(indicator)
 ```
+
+Consent is scoped independently for cloud STT, cloud LLM processing, cloud TTS, and diagnostic uploads. Unknown speakers, guest sessions, children without guardian approval, rooms that prohibit cloud audio, and groups with incompatible consent remain local-only. Revocation disables the adapter immediately and removes its provider credential from the active runtime.
+
+The provider configuration must document processing region, retention controls, training-use controls, deletion procedures, and transport security. The audit log contains the provider, consent reference, data category, purpose, timestamp, and outcome; it never contains raw audio or transcript content.
+
+#### 17.1.1 Validation Requirements
+
+1. Local STT failure alone cannot invoke this adapter.
+2. Missing, expired, revoked, wrong-provider, or wrong-feature consent blocks transmission.
+3. Speaker and room policy uncertainty resolves to local-only processing.
+4. No bytes leave the system until the cloud-processing indicator is confirmed.
+5. Audio limits and post-activation trimming are applied before transmission.
+6. Provider failure cannot cascade to another provider.
+7. Revocation takes effect without restarting the adapter.
+8. Egress audit records contain metadata about the decision, never audio or transcript content.
+
+#### 17.1.2 Speech Synthesis Provider Adapter
+
+Piper, XTTS, and ElevenLabs implement one internal streaming contract. The registry selects a provider from server-owned policy; callers cannot name a provider to bypass consent, redaction, budget, or availability rules.
+
+```python
+class SpeechSynthesisRouter:
+    async def stream(
+        self,
+        response: ApprovedSpeechResponse,
+        context: AudioPrivacyContext,
+    ) -> AsyncIterator[bytes]:
+        selection = await speech_policy.select_provider(response, context)
+
+        if selection.provider in {'piper', 'xtts'}:
+            async for chunk in local_tts[selection.provider].stream(
+                text=response.text,
+                voice=selection.voice_id,
+            ):
+                yield chunk
+            return
+
+        if selection.provider != 'elevenlabs':
+            raise PolicyError('unregistered_tts_provider')
+
+        decision = await privacy_policy.authorize_text_egress(
+            feature='cloud_tts',
+            provider='elevenlabs',
+            consent_id=context.cloud_tts_consent_id,
+            room_id=context.room_id,
+            speaker_ids=context.speaker_ids,
+            data_categories=response.data_categories,
+            purpose='speech_synthesis',
+        )
+        if not decision.allowed:
+            raise PolicyError(decision.reason)
+
+        redacted = response.redact_for(decision.allowed_data_categories)
+        await cloud_budget.reserve_or_reject(
+            provider='elevenlabs',
+            principal_id=context.principal_id,
+            units=len(redacted.text),
+        )
+
+        request_id = await privacy_audit.record_egress_start(
+            feature='cloud_tts', provider='elevenlabs',
+            consent_id=decision.consent_id,
+            data_category='redacted_response_text',
+        )
+        try:
+            async for chunk in elevenlabs_tts.stream(
+                text=redacted.text,
+                voice_id=selection.voice_id,
+                request_id=request_id,
+            ):
+                yield chunk
+            await privacy_audit.record_egress_complete(request_id, 'success')
+        except ProviderError:
+            await privacy_audit.record_egress_complete(request_id, 'failed')
+            # Do not send the text to a second cloud provider. The caller may
+            # explicitly offer to repeat an ordinary response through Piper.
+            raise
+```
+
+ElevenLabs credentials are loaded only by the server-side adapter from the secrets service. Voice identifiers are allowlisted. Response text is bounded, classified, and redacted before transmission. Security details, private recordings, credentials, raw tool results, and data categories outside the active consent are rejected. Per-user and household rate limits, monthly spending ceilings, latency/error metrics, and a provider kill switch are mandatory.
+
+ElevenLabs handles synthesis only in this integration. Conversation reasoning, identity, memory, tool selection, authorization, and audit remain within AI Home OS. Adopting an ElevenLabs agent product would be a different architecture and requires a new review because it could move STT, conversation state, or orchestration outside the home.
 
 ### 17.2 Home Automation Protocol Adapters
 
@@ -2003,24 +2393,26 @@ SELECT create_hypertable('api_request_log', 'timestamp',
 
 **Decision:** REST for external-facing API (client simplicity, caching, tooling). gRPC for internal service-to-service (performance, streaming, typed contracts). GraphQL deferred to v2 if dashboard flexibility demands it.
 
-### 20.2 WebSockets vs. Server-Sent Events
+### 20.2 Control Events and Conversational Media
 
-| Protocol | Bidirectional | Browser Support | Reconnect | Load balancing |
-|----------|--------------|----------------|-----------|---------------|
-| **WebSocket (primary)** | Yes | Excellent | Manual | Sticky sessions needed |
-| **SSE (fallback)** | No (read-only) | Excellent | Automatic | Standard |
+| Protocol | Assigned responsibility | Why |
+|----------|-------------------------|-----|
+| **WebSocket `/v1/ws`** | Device state, alerts, presence, energy, structured commands | Simple application events and subscriptions |
+| **SSE** | Read-only event fallback | Broad client support and automatic reconnect |
+| **Self-hosted LiveKit/WebRTC** | Full-duplex conversational audio and related session data | Media adaptation, interruption, turn-taking, and mobile network handling |
+| **Snapcast/local playback** | Synchronized room announcements and offline audio | Local resilience and multi-room timing |
 
-**Decision:** WebSocket as primary (needed for voice commands via wall panel). SSE as fallback for simple monitoring clients and scripts.
+**Decision:** use each transport for its defined plane. LiveKit does not replace the API WebSocket, MQTT, Snapcast, or the independent safety path. LiveKit Cloud remains disabled unless a later privacy and hosting review approves it.
 
-### 20.3 Plugin Sandboxing: Process Isolation vs. In-Process Scoping
+### 20.3 Plugin Isolation and In-Process Trust
 
 | Approach | Security | Overhead | Plugin DX |
 |----------|---------|---------|----------|
-| **In-process (this design)** | Medium | Low | Good |
+| In-process capability wrappers | Low for hostile code; acceptable only for reviewed first-party code | Low | Good |
 | Subprocess per plugin | High | High | Poor |
 | WebAssembly (WASM) | High | Medium | Complex |
 
-**Decision:** In-process with permission scoping (v1). WASM sandbox for untrusted community plugins (v2).
+**Decision:** Reviewed and signed first-party plugins may run in-process with capability wrappers. Third-party code is disabled until an isolated subprocess, container, or WASM runtime satisfies the controls in Section 9.3. Isolation is a release prerequisite for community-plugin support rather than a deferred hardening feature.
 
 ---
 
@@ -2028,9 +2420,13 @@ SELECT create_hypertable('api_request_log', 'timestamp',
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
-| HA bridge downtime → all device control fails | Medium | High | HA offline queue; MQTT direct fallback |
+| HA bridge downtime interrupts device control | Medium | High | Fail security actions immediately; queue only policy-approved, expiring, retry-safe work; route designated safety actions to an independent local controller |
 | WebSocket memory leak (zombie connections) | Medium | Medium | Heartbeat timeout; connection max limit |
-| Plugin with memory leak destabilises API process | Low | Medium | Plugin resource limits; memory watchdog |
+| LiveKit room or token grants expose another session | Low | Very High | Opaque rooms; least-privilege short-lived grants; server authorization; revocation and isolation tests |
+| LiveKit outage interrupts mobile/panel conversation | Medium | Medium | Typed-command fallback; local satellite, Snapcast, alert, and safety paths remain independent |
+| ElevenLabs sends or retains more response data than approved | Low | Very High | Server adapter; redaction; feature-specific consent; provider controls; metadata-only egress audit; kill switch |
+| ElevenLabs cost exceeds household policy | Medium | Medium | Piper default; usage quotas; spending ceiling; alerts; no automatic cloud fallback |
+| Trusted in-process plugin destabilises or accesses API process | Low | High | First-party review and signature allowlist; capability audit; watchdog; third-party code prohibited in-process |
 | Outbound webhook floods external service | Low | Medium | Max retry cap; exponential backoff; circuit breaker |
 | API key leaked via logs | Low | High | Keys never logged; prefix-only in logs; log scrubbing |
 | gRPC service discovery failure (service restart) | Medium | Medium | Static addresses in Docker network; health check restarts |
@@ -2042,7 +2438,7 @@ SELECT create_hypertable('api_request_log', 'timestamp',
 | Improvement | Version | Description |
 |-------------|---------|-------------|
 | GraphQL subscriptions | v2 | Real-time GraphQL for flexible dashboard queries |
-| WASM plugin sandbox | v2 | Untrusted community plugins in WASM runtime |
+| Isolated community-plugin runtime | Prerequisite for community plugins | Container, restricted subprocess, or WASM boundary with brokered capabilities and escape testing |
 | API federation | v3 | Multi-home federation (manage multiple properties from one app) |
 | OpenAI-compatible API | v2 | Expose local LLM as OpenAI-compatible endpoint for third-party apps |
 | Streaming command responses | v2 | Stream LLM response tokens to mobile app (perceived latency) |
@@ -2068,6 +2464,11 @@ SELECT create_hypertable('api_request_log', 'timestamp',
 13. **bcrypt** — https://github.com/pyca/bcrypt/
 14. **Google Calendar API** — https://developers.google.com/calendar/api
 15. **Tibber Developer API** — https://developer.tibber.com/docs/reference
+16. **LiveKit Agents** — https://docs.livekit.io/agents/
+17. **LiveKit Self-hosting** — https://docs.livekit.io/transport/self-hosting/
+18. **LiveKit Voice Pipeline Types** — https://docs.livekit.io/agents/models/pipelines/
+19. **ElevenLabs Streaming TTS WebSocket** — https://elevenlabs.io/docs/eleven-api/guides/how-to/websockets/realtime-tts
+20. **ElevenLabs API Pricing** — https://elevenlabs.io/pricing/api
 
 ---
 

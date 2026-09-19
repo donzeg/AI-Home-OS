@@ -11,10 +11,10 @@
 
 ---
 
-[![Status](https://img.shields.io/badge/Status-Architecture%20Phase-blue)]()
+[![Status](https://img.shields.io/badge/Status-Specification%20Only-blue)]()
 [![License](https://img.shields.io/badge/License-MIT-green)]()
 [![Contributions](https://img.shields.io/badge/Contributions-Welcome-brightgreen)]()
-[![Chapters](https://img.shields.io/badge/Spec%20Chapters-16-orange)]()
+[![Chapters](https://img.shields.io/badge/Spec%20Chapters-17-orange)]()
 [![Philosophy](https://img.shields.io/badge/Philosophy-Edge%20First%2C%20Cloud%20Fallback-purple)]()
 
 </div>
@@ -23,14 +23,16 @@
 
 ## What Is AI Home OS?
 
-AI Home OS is an **open design specification and reference implementation** for a next-generation autonomous intelligence layer for homes and buildings.
+AI Home OS is an **open, draft design specification** for a proposed autonomous intelligence layer for homes and buildings.
+
+> **Implementation status:** Nothing described in this repository has been implemented or validated yet. The repository contains architecture documents, illustrative pseudocode, proposed schemas, and configuration examples. It does not currently contain a runnable reference implementation. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
 It is **not** Home Assistant.  
 It is **not** Alexa.  
 It is **not** Google Home.  
 It is **not** a configuration layer.
 
-It is an **AI Operating System** — an autonomous reasoning platform that:
+The specification describes a proposed **AI Operating System** that is intended to:
 
 - Perceives the physical environment through sensors, cameras, and microphones
 - Identifies who is present using multi-modal identity fusion
@@ -169,7 +171,7 @@ flowchart TD
 
 ---
 
-## Technology Stack
+## Proposed Technology Stack
 
 ### Core AI
 
@@ -177,7 +179,8 @@ flowchart TD
 |-----------|---------------|----------------|
 | LLM Reasoning | Ollama + Llama 3.3 / Mistral / Phi-4 | GPT-4o / Claude 3.5 / Gemini 2.0 |
 | Speech-to-Text | Whisper (faster-whisper) | Deepgram / Azure Speech |
-| Text-to-Speech | Piper TTS | ElevenLabs / Azure Neural |
+| Text-to-Speech | Piper default; XTTS optional | ElevenLabs streaming TTS, explicit opt-in |
+| Conversational Media | Self-hosted LiveKit | LiveKit Cloud requires a separate hosting and privacy review |
 | Object Detection | Frigate + YOLO | Cloud Vision API |
 | Face Recognition | DeepFace (local) | Azure Face API |
 | Embeddings | Nomic Embed / BGE-M3 | OpenAI Embeddings |
@@ -196,11 +199,23 @@ flowchart TD
 | Knowledge Graph | Neo4j |
 | Cache | Redis 7 |
 | Object Storage | MinIO |
-| Container Runtime | Docker + k3s (Kubernetes edge) |
+| Virtualization | Proxmox VE reference residential host |
+| Application Runtime | Docker Compose inside the AI compute VM |
+| Commercial Orchestration | Candidate k3s design; requires separate validation |
 | Monitoring | Prometheus + Grafana |
 | Log Aggregation | Loki + Grafana |
 | API Gateway | Traefik |
 | CI/CD | Gitea Actions (local) + GitHub Actions |
+
+### Client Applications
+
+| Target | Technology | Boundary |
+|--------|------------|----------|
+| Android and iOS | Flutter | Resident controls, voice, notifications, security, and energy views |
+| Wall panels | Flutter Web in Chromium kiosk mode | Room-scoped control; local Python service owns GPIO, NFC, PIR, and LEDs |
+| Administration | Flutter Web | Owner and installer workflows through the API gateway |
+
+Flutter is the shared presentation framework. AI reasoning, authorization, automation, device execution, and data storage remain backend responsibilities and do not run in the Flutter clients.
 
 ### Networking
 
@@ -226,26 +241,27 @@ flowchart TD
 
 ## Specification Document Structure
 
-This repository contains the complete design specification in 16 chapters. Each chapter is self-contained with architecture diagrams, design decisions, trade-offs, hardware/software recommendations, pseudo-code, and references.
+This repository organizes the draft design specification into 17 chapters. A listed chapter means the draft file is present; it does not mean the design is resolved, implemented, tested, or complete.
 
 | Chapter | Title | Status |
 |---------|-------|--------|
-| [Ch 01 — Physical Infrastructure](docs/Chapter-01-Physical-Infrastructure.md) | Physical Infrastructure | ✅ Complete |
-| [Ch 02 — Sensor Layer](docs/Chapter-02-Sensor-Layer.md) | Sensor Layer | ✅ Complete |
-| [Ch 03 — Vision System](docs/Chapter-03-Vision-System.md) | Vision System | ✅ Complete |
-| [Ch 04 — Audio System](docs/Chapter-04-Audio-System.md) | Audio System | ✅ Complete |
-| [Ch 05 — Identity System](docs/Chapter-05-Identity-System.md) | Identity System | ✅ Complete |
-| [Ch 06 — Memory System](docs/Chapter-06-Memory-System.md) | Memory System | ✅ Complete |
-| [Ch 07 — AI Reasoning Engine](docs/Chapter-07-AI-Reasoning-Engine.md) | AI Reasoning Engine | ✅ Complete |
-| [Ch 08 — Context Engine](docs/Chapter-08-Context-Engine.md) | Context Engine | ✅ Complete |
-| [Ch 09 — Automation Engine](docs/Chapter-09-Automation-Engine.md) | Automation Engine | ✅ Complete |
-| [Ch 10 — Energy Intelligence](docs/Chapter-10-Energy-Intelligence.md) | Energy Intelligence | ✅ Complete |
-| [Ch 11 — Security Architecture](docs/Chapter-11-Security-Architecture.md) | Security Architecture | ✅ Complete |
-| [Ch 12 — API & Integration Layer](docs/Chapter-12-API-and-Integration-Layer.md) | API & Integration Layer | ✅ Complete |
-| [Ch 13 — Mobile Application](docs/Chapter-13-Mobile-Application.md) | Mobile Application | ✅ Complete |
-| [Ch 14 — Wall Panels](docs/Chapter-14-Wall-Panels.md) | Wall Panels | ✅ Complete |
-| [Ch 15 — AI Conversation Examples](docs/Chapter-15-AI-Conversation-Examples.md) | AI Conversation Examples | ✅ Complete |
-| [Ch 16 — Future Roadmap](docs/Chapter-16-Future-Roadmap.md) | Future Roadmap | ✅ Complete |
+| [Ch 01 — Physical Infrastructure](docs/Chapter-01-Physical-Infrastructure.md) | Physical Infrastructure | Draft chapter present |
+| [Ch 02 — Sensor Layer](docs/Chapter-02-Sensor-Layer.md) | Sensor Layer | Draft chapter present |
+| [Ch 03 — Vision System](docs/Chapter-03-Vision-System.md) | Vision System | Draft chapter present |
+| [Ch 04 — Audio System](docs/Chapter-04-Audio-System.md) | Audio System | Draft chapter present |
+| [Ch 05 — Identity System](docs/Chapter-05-Identity-System.md) | Identity System | Draft chapter present |
+| [Ch 06 — Memory System](docs/Chapter-06-Memory-System.md) | Memory System | Draft chapter present |
+| [Ch 07 — AI Reasoning Engine](docs/Chapter-07-AI-Reasoning-Engine.md) | AI Reasoning Engine | Draft chapter present |
+| [Ch 08 — Context Engine](docs/Chapter-08-Context-Engine.md) | Context Engine | Draft chapter present |
+| [Ch 09 — Automation Engine](docs/Chapter-09-Automation-Engine.md) | Automation Engine | Draft chapter present |
+| [Ch 10 — Energy Intelligence](docs/Chapter-10-Energy-Intelligence.md) | Energy Intelligence | Draft chapter present |
+| [Ch 11 — Security Architecture](docs/Chapter-11-Security-Architecture.md) | Security Architecture | Draft chapter present |
+| [Ch 12 — API & Integration Layer](docs/Chapter-12-API-and-Integration-Layer.md) | API & Integration Layer | Draft chapter present |
+| [Ch 13 — Mobile Application](docs/Chapter-13-Mobile-Application.md) | Mobile Application | Draft chapter present |
+| [Ch 14 — Wall Panels](docs/Chapter-14-Wall-Panels.md) | Wall Panels | Draft chapter present |
+| [Ch 15 — AI Conversation Examples](docs/Chapter-15-AI-Conversation-Examples.md) | AI Conversation Examples | Draft chapter present |
+| [Ch 16 — Future Roadmap](docs/Chapter-16-Future-Roadmap.md) | Future Roadmap | Draft chapter present |
+| [Ch 17 — Deployment & Application Architecture](docs/Chapter-17-Deployment-and-Application-Architecture.md) | Deployment and Application Architecture | Draft chapter present |
 
 ---
 
@@ -428,7 +444,7 @@ gantt
     title AI Home OS — Build Phases
     dateFormat YYYY-MM
     section Phase 1 — Specification
-    Architecture documents       :done,    spec, 2026-07, 3M
+    Architecture specification draft :active, spec, 2026-07, 6M
     section Phase 2 — Foundation
     Core infrastructure setup    :         infra, 2026-10, 3M
     Sensor layer + MQTT          :         sensor, 2026-10, 4M
@@ -528,50 +544,19 @@ arch(memory): propose alternative vector DB strategy
 ```
 AI-Home-OS/
 ├── README.md                          ← You are here
+├── IMPLEMENTATION_STATUS.md           ← Authoritative project status
 ├── AI Home OS — Table of Contents.md ← Master chapter index
-│
+├── AI Home OS Architecture.md         ← Early architecture draft
 ├── docs/                              ← Specification chapters
-│   ├── Chapter-01.md                  ← Physical Infrastructure
-│   ├── Chapter-02.md                  ← Sensor Layer
-│   ├── Chapter-03.md                  ← Vision System
-│   ├── Chapter-04.md                  ← Audio System
-│   ├── Chapter-05.md                  ← Identity System
-│   ├── Chapter-06.md                  ← Memory System
-│   ├── Chapter-07.md                  ← AI Reasoning Engine
-│   ├── Chapter-08.md                  ← Context Engine
-│   ├── Chapter-09.md                  ← Automation Engine
-│   ├── Chapter-10.md                  ← Energy Intelligence
-│   ├── Chapter-11.md                  ← Security Architecture
-│   ├── Chapter-12.md                  ← API & Integration Layer
-│   ├── Chapter-13.md                  ← Mobile Application
-│   ├── Chapter-14.md                  ← Wall Panels
-│   ├── Chapter-15.md                  ← AI Conversation Examples
-│   └── Chapter-16.md                  ← Future Roadmap
-│
-├── prototypes/                        ← Proof-of-concept implementations
-│   ├── context-engine/
-│   ├── memory-system/
-│   ├── agent-framework/
-│   └── energy-optimizer/
-│
-├── diagrams/                          ← Architecture diagrams (source files)
-│   ├── system-overview.mmd
-│   ├── network-topology.mmd
-│   ├── agent-communication.mmd
-│   └── energy-flow.mmd
-│
-├── hardware/                          ← Hardware reference lists and BOM
-│   ├── sensor-bom.md
-│   ├── compute-bom.md
-│   └── networking-bom.md
-│
+│   ├── Chapter-01-Physical-Infrastructure.md
+│   ├── ...
+│   └── Chapter-16-Future-Roadmap.md
 └── .github/
     ├── ISSUE_TEMPLATE/
-    │   ├── architecture-proposal.md
-    │   ├── chapter-review.md
-    │   └── bug-report.md
     └── PULL_REQUEST_TEMPLATE.md
 ```
+
+Directories for services, applications, deployment manifests, migrations, and tests do not exist yet. They will be added only when implementation work begins.
 
 ---
 
@@ -600,22 +585,24 @@ We want this project to be a **serious engineering community**, not just a wishl
 
 ---
 
-## Comparison With Existing Systems
+## Specification Coverage Compared With Existing Systems
+
+This table compares intended design coverage. `Specified` means the topic is described in this repository; it does not mean a working capability exists or that comparative testing has been performed.
 
 | Feature | AI Home OS | Home Assistant | Alexa | Google Home |
 |---------|-----------|----------------|-------|-------------|
-| Autonomous reasoning | ✅ | ❌ | ❌ | ❌ |
-| Long-term memory | ✅ | ❌ | Limited | Limited |
-| Multi-agent architecture | ✅ | ❌ | ❌ | ❌ |
-| Local-first AI | ✅ | Partial | ❌ | ❌ |
-| Identity fusion (multi-modal) | ✅ | ❌ | ❌ | ❌ |
-| Energy intelligence | ✅ | Partial | ❌ | ❌ |
-| Proactive conversation | ✅ | ❌ | Limited | Limited |
-| Predictive automation | ✅ | ❌ | ❌ | ❌ |
-| Context-aware decisions | ✅ | ❌ | ❌ | ❌ |
-| Open architecture | ✅ | ✅ | ❌ | ❌ |
-| Edge + Cloud hybrid AI | ✅ | Partial | ❌ | ❌ |
-| Privacy-first design | ✅ | ✅ | ❌ | ❌ |
+| Autonomous reasoning | Specified | ❌ | ❌ | ❌ |
+| Long-term memory | Specified | ❌ | Limited | Limited |
+| Multi-agent architecture | Specified | ❌ | ❌ | ❌ |
+| Local-first AI | Specified | Partial | ❌ | ❌ |
+| Identity fusion (multi-modal) | Specified | ❌ | ❌ | ❌ |
+| Energy intelligence | Specified | Partial | ❌ | ❌ |
+| Proactive conversation | Specified | ❌ | Limited | Limited |
+| Predictive automation | Specified | ❌ | ❌ | ❌ |
+| Context-aware decisions | Specified | ❌ | ❌ | ❌ |
+| Open architecture | Specified | ✅ | ❌ | ❌ |
+| Edge + Cloud hybrid AI | Specified | Partial | ❌ | ❌ |
+| Privacy-first design | Specified | ✅ | ❌ | ❌ |
 
 ---
 
@@ -628,6 +615,8 @@ This project stands on the shoulders of the open-source community. Key projects 
 - [ESPHome](https://esphome.io/) — Firmware for custom ESP32/ESP8266 sensors
 - [Whisper](https://github.com/openai/whisper) — OpenAI's open-source speech recognition
 - [Piper TTS](https://github.com/rhasspy/piper) — Fast, local neural text-to-speech
+- [LiveKit](https://docs.livekit.io/) — Self-hosted WebRTC media plane for authorized conversational sessions
+- [ElevenLabs](https://elevenlabs.io/docs/eleven-api/overview) — Optional consent-gated streaming cloud TTS provider
 - [Ollama](https://ollama.ai/) — Run large language models locally
 - [Zigbee2MQTT](https://www.zigbee2mqtt.io/) — Zigbee to MQTT bridge
 - [pgvector](https://github.com/pgvector/pgvector) — Vector similarity search for PostgreSQL

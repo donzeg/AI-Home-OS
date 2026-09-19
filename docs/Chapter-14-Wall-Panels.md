@@ -2,8 +2,12 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
-**Date:** 2026-07-17
+**Status:** Draft specification v1.1
+**Date:** 2026-09-16
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
+
+> **Framework decision:** The panel interface is a Flutter Web presentation client loaded by Chromium. The Raspberry Pi operating system, Wayland/Wayfire display stack, Python GPIO service, and AI Home OS backend remain separate components.
 
 ---
 
@@ -45,6 +49,8 @@
 ## 1. Overview
 
 Wall panels are the **physical command centres** of AI Home OS — always-on, room-contextual, zero-latency touchscreens that control every aspect of the room they are installed in. Unlike the mobile app (used from anywhere), a wall panel is **aware of its physical location** and defaults its UI to the room it is mounted in.
+
+Panels are room-scoped resident interfaces, not platform administration consoles. They do not configure infrastructure, providers, backups, global integrations, or Proxmox. Chapter 17 defines the application boundaries.
 
 Panels serve four distinct roles:
 
@@ -220,15 +226,15 @@ Wall panels have no internet access and cannot reach IoT devices directly.
 | Layer | Technology | Reason |
 |-------|-----------|--------|
 | **OS** | Raspberry Pi OS Lite (64-bit) | Minimal; headless base |
-| **Display server** | Wayfire (Wayland) | Lightweight, no compositor overhead |
-| **Browser (kiosk)** | Chromium 124 (kiosk flags) | Web-based UI, auto-updates from server |
-| **UI framework** | React 18 + Vite | Same ecosystem as mobile; fast HMR |
+| **Display compositor** | Wayfire on Wayland | Lightweight kiosk-capable compositor for Raspberry Pi OS |
+| **Browser (kiosk)** | Managed Chromium release | Loads the centrally deployed Flutter Web client |
+| **UI framework** | Flutter Web | Shared design system, domain models, and client services with mobile |
 | **UI components** | Custom design system (no UI lib) | Full control over flat design |
-| **State** | Zustand + SWR | Lightweight for panel |
+| **State** | Riverpod with repository interfaces | Same testable state and transport boundaries as mobile |
 | **WebSocket** | Native WebSocket | Live state updates |
-| **Voice** | Web Speech API → Wyoming WebSocket | VAD + streaming |
+| **Voice** | LiveKit Flutter SDK over WebRTC | Full-duplex audio, interruption, and session lifecycle through the self-hosted media plane |
 | **Panel service** | Python (FastAPI) | Local GPIO control (PIR, LED, NFC) |
-| **Auto-update** | Panel fetches UI from AI server at startup | Single source of truth for UI |
+| **Auto-update** | Panel fetches the versioned Flutter Web release from AI Home OS | Central deployment and rollback without per-panel application installation |
 
 ### 6.1 Chromium Kiosk Launch
 
@@ -240,10 +246,8 @@ Wall panels have no internet access and cannot reach IoT devices directly.
 # Wait for network
 until ping -c1 api.home.local &>/dev/null; do sleep 2; done
 
-# Disable screen blanking
-xset s off
-xset -dpms
-xset s noblank
+# Screen power and idle behavior are managed by the Wayfire configuration
+# and the local panel service. X11 xset commands are not used on Wayland.
 
 # Start Chromium in kiosk mode
 chromium-browser \
@@ -279,7 +283,7 @@ PANEL_ROLE=room_controller    # room_controller | entry | energy | bedroom
 ```mermaid
 flowchart TD
     subgraph PANEL["Wall Panel (RPi 5)"]
-        BROWSER["Chromium Kiosk\n(React UI)"]
+        BROWSER["Chromium Kiosk\n(Flutter Web UI)"]
         PANEL_SVC["Panel Service\n(FastAPI — local GPIO)"]
         PIR["PIR Sensor\n(GPIO)"]
         NFC_HW["NFC Reader\n(PN532 UART)"]
@@ -291,7 +295,7 @@ flowchart TD
     subgraph BACKEND["AI Home OS Server"]
         API["REST API\n(port 8080)"]
         WS["WebSocket\n(port 8081)"]
-        WYOMING["Wyoming Voice\n(port 10300)"]
+        LIVEKIT["Self-hosted LiveKit\n(WebRTC media)"]
         MQTT_BROKER["MQTT Broker\n(port 8883)"]
     end
 
@@ -305,7 +309,7 @@ flowchart TD
     BROWSER --> WS
     MIC --> BROWSER
     BROWSER --> SPEAKER
-    BROWSER --> WYOMING
+    BROWSER <--> LIVEKIT
     BROWSER --> PANEL_SVC
 ```
 
@@ -351,47 +355,15 @@ Sensor data: 20px, secondary colour (#8888A0)
 
 ### 8.2 Ambient Mode Implementation
 
-```typescript
-// src/components/AmbientDisplay.tsx
+```dart
+class AmbientPanel extends StatelessWidget {
+  const AmbientPanel({required this.summary, super.key});
+  final RoomSummary summary;
 
-function AmbientDisplay({ room }: { room: Room }) {
-  const [brightness, setBrightness] = useState(10);
-  const time = useClock();               // Updates every minute
-  const sensors = useRoomSensors(room.id);
-  const energy = useEnergyLive();
-  const presence = useHomePresence();
-
-  // Ambient brightness controlled by time of day
-  useEffect(() => {
-    const hour = new Date().getHours();
-    if (hour >= 22 || hour < 6)  setBrightness(3);   // Night: very dim
-    else if (hour < 8)           setBrightness(8);   // Early morning
-    else                         setBrightness(15);  // Daytime
-  }, [time.hour]);
-
-  return (
-    <View style={[styles.ambient, { opacity: brightness / 100 }]}>
-      <Text style={styles.clockTime}>
-        {time.format('HH:mm')}
-      </Text>
-      <Text style={styles.clockDate}>
-        {time.format('dddd · D MMMM YYYY')}
-      </Text>
-
-      <Divider />
-
-      <SensorRow icon="thermometer" value={`${sensors.temp_c}°C`} />
-      <SensorRow icon="droplets"   value={`${sensors.humidity}%`} />
-      <SensorRow icon="wind"       value={`${sensors.co2_ppm} ppm CO₂`} />
-
-      <Divider />
-
-      <EnergyRow solar={energy.solar_w} battery={energy.battery_soc} />
-
-      <PresenceList persons={presence.persons_home.slice(0, 3)} />
-
-      <TouchPrompt />
-    </View>
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: summary.accessibleSummary,
+    child: AmbientLayout(summary: summary),
   );
 }
 ```
@@ -451,29 +423,10 @@ class PIRController:
 
 When the panel wakes, it requests a face recognition check to personalise the UI:
 
-```typescript
-// Wake event received from PIR service
-async function onPanelWake() {
-  setMode('active');
-
-  // Request face scan to identify who approached
-  const scan = await api.requestFaceScan({ camera: 'panel', room: PANEL_ROOM_ID });
-
-  if (scan.person) {
-    setCurrentUser(scan.person);
-    showPersonalisedGreeting(scan.person);
-  } else {
-    setCurrentUser(null);  // Unknown person — show public controls only
-  }
-}
-
-function showPersonalisedGreeting(person: Person) {
-  // Context-aware greeting
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-
-  setGreeting(`${greeting}, ${person.name}.`);
-  setTimeout(() => setGreeting(null), 5000);
+```dart
+Future<void> onPanelWake(WidgetRef ref) async {
+  final identity = await ref.read(panelApiProvider).requestPresenceCheck();
+  ref.read(panelSessionProvider.notifier).wake(identity);
 }
 ```
 
@@ -524,90 +477,28 @@ This is the default screen shown when the panel wakes. It shows all controllable
 
 ### 10.2 Room Control Implementation
 
-```typescript
-// src/screens/RoomControlScreen.tsx
-
-export function RoomControlScreen() {
-  const roomId = usePanelConfig().roomId;
-
-  const { data: room } = useSWR(`/v1/rooms/${roomId}`, fetcher, {
-    refreshInterval: 30000
-  });
-  const { data: devices } = useSWR(`/v1/rooms/${roomId}/devices`, fetcher);
-  const liveStates = useWebSocketStore(s => s.deviceStates);
-
-  const lights = devices?.filter(d => d.type === 'light') ?? [];
-  const climate = devices?.find(d => d.type === 'climate');
-  const scenes = room?.scenes ?? [];
-
-  return (
-    <View style={styles.screen}>
-      <RoomHeader
-        name={room?.name}
-        occupancy={room?.occupancy}
-        sensors={room?.sensors}
-      />
-
-      <Section title="Lights" action={<AllOffButton roomId={roomId} />}>
-        <DeviceGrid devices={lights} liveStates={liveStates} columns={2} />
-      </Section>
-
-      {climate && (
-        <Section title="Climate">
-          <ClimateCard device={climate} liveState={liveStates[climate.device_id]} />
-        </Section>
-      )}
-
-      <Section title="Scenes">
-        <SceneRow scenes={scenes} onScenePress={activateScene} />
-      </Section>
-
-      <VoiceCommandBar roomId={roomId} />
-
-      <BottomNav activeTab="room" />
-    </View>
-  );
+```dart
+class RoomControlScreen extends ConsumerWidget {
+  const RoomControlScreen({super.key});
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final room = ref.watch(assignedRoomProvider);
+    return RoomControlGrid(room: room);
+  }
 }
 ```
 
 ### 10.3 Device Tile Component
 
-```typescript
-// Large, finger-friendly device tile optimised for touchscreen
-function DeviceTile({ device, liveState, onPress, onLongPress }: DeviceTileProps) {
-  const state = liveState ?? device.state;
-  const isOn = state?.on === true || state?.state === 'on';
-
-  return (
-    <TouchableOpacity
-      style={[styles.tile, isOn ? styles.tileOn : styles.tileOff]}
-      onPress={onPress}
-      onLongPress={onLongPress}
-      activeOpacity={0.7}
-      accessibilityRole="button"
-      accessibilityLabel={`${device.name}, ${isOn ? 'on' : 'off'}`}
-    >
-      <DeviceIcon type={device.type} active={isOn} size={32} />
-      <Text style={[styles.tileName, !isOn && styles.textDim]}>
-        {device.name}
-      </Text>
-      <View style={styles.tileStatus}>
-        <View style={[styles.dot, { backgroundColor: isOn ? '#2ECC71' : '#2A2A35' }]} />
-        <Text style={styles.stateText}>{isOn ? 'ON' : 'OFF'}</Text>
-      </View>
-      {isOn && device.capabilities.includes('brightness') && (
-        <BrightnessBar value={state.brightness ?? 100} />
-      )}
-    </TouchableOpacity>
-  );
-}
-
-// Brightness bar — flat horizontal fill
-function BrightnessBar({ value }: { value: number }) {
-  return (
-    <View style={styles.brightnessTrack}>
-      <View style={[styles.brightnessFill, { width: `${value}%`, backgroundColor: '#F1C40F' }]} />
-    </View>
+```dart
+class DeviceTile extends ConsumerWidget {
+  const DeviceTile({required this.device, super.key});
+  final DeviceState device;
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => ControlTile(
+    label: device.displayName,
+    enabled: device.isOn,
+    onChanged: (value) => ref.read(deviceCommandsProvider).setPower(device.id, value),
   );
 }
 ```
@@ -652,68 +543,22 @@ The JARVIS screen on a wall panel is designed to be spoken to from across the ro
 
 Voice always active on JARVIS tab — no tap-to-speak needed
 Wake word: "JARVIS" (openWakeWord via ESP32 satellite OR panel mic)
-Activation: openWakeWord detects → Wyoming streams audio → STT → AI engine
+Activation: openWakeWord detects → authorized LiveKit session publishes audio → local STT → AI engine
 ```
 
 ### 11.2 Panel Voice Service
 
-```typescript
-// Panel connects to Wyoming voice protocol on AI server
-class PanelVoiceService {
-  private ws: WebSocket | null = null;
-  private mediaRecorder: MediaRecorder | null = null;
-
-  async startListening() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        sampleRate: 16000,
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-      }
-    });
-
-    // Connect to Wyoming (voice protocol) on AI server
-    this.ws = new WebSocket(`wss://api.home.local/v1/voice/stream?panel=${PANEL_ID}`);
-
-    this.ws.onopen = () => {
-      // Start streaming audio chunks
-      this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-      this.mediaRecorder.ondataavailable = (e) => {
-        if (this.ws?.readyState === WebSocket.OPEN && e.data.size > 0) {
-          this.ws.send(e.data);
-        }
-      };
-      this.mediaRecorder.start(100);  // 100ms chunks
-    };
-
-    this.ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      switch (msg.type) {
-        case 'transcript':
-          useVoiceStore.setState({ transcript: msg.text, state: 'processing' });
-          break;
-        case 'response':
-          useVoiceStore.setState({
-            response: msg.response_text,
-            state: 'speaking',
-            transcript: msg.input_text
-          });
-          this.playAudio(msg.audio_url);
-          break;
-        case 'done':
-          useVoiceStore.setState({ state: 'idle' });
-          break;
-      }
-    };
-  }
-
-  private playAudio(url: string) {
-    const audio = new Audio(url);
-    audio.play();
-  }
+```dart
+Future<Room> startPanelVoiceSession() async {
+  final grant = await panelApi.createVoiceSession(panelId: panelId, roomId: roomId);
+  final room = Room();
+  await room.connect(grant.liveKitUrl, grant.participantToken);
+  await room.localParticipant.setMicrophoneEnabled(true);
+  return room;
 }
 ```
+
+The API issues a short-lived token bound to the registered panel, configured room, and required publish/subscribe grants. The panel cannot choose another room or service identity. Assistant audio arrives as a LiveKit track; the panel never receives an ElevenLabs credential or contacts the provider directly. A LiveKit failure disables conversational voice on that panel while touch controls, local alert playback, and the independent safety path remain separate.
 
 ---
 
@@ -878,92 +723,11 @@ The energy screen on the wall panel gives a real-time view of home energy flows 
 
 Security actions on the panel always require a PIN or face recognition:
 
-```typescript
-function AlarmControl({ alarm }: { alarm: AlarmState }) {
-  const [showPIN, setShowPIN] = useState(false);
-  const [pendingAction, setPendingAction] = useState<AlarmAction | null>(null);
-
-  const requestAlarmAction = (action: AlarmAction) => {
-    setPendingAction(action);
-    setShowPIN(true);
-  };
-
-  const onPINComplete = async (pin: string) => {
-    setShowPIN(false);
-    try {
-      await api.alarmAction(pendingAction!, { pin });
-    } catch (e: any) {
-      showError(e.message);
-    }
-  };
-
-  if (showPIN) {
-    return (
-      <PINEntryOverlay
-        prompt={`Enter PIN to ${pendingAction}`}
-        onComplete={onPINComplete}
-        onCancel={() => setShowPIN(false)}
-      />
-    );
-  }
-
-  return (
-    <View style={styles.alarmCard}>
-      <AlarmStateBadge state={alarm.state} />
-      <AlarmActionButtons
-        onDisarm={() => requestAlarmAction('disarm')}
-        onArmHome={() => requestAlarmAction('arm_home')}
-        onArmAway={() => requestAlarmAction('arm_away')}
-      />
-    </View>
-  );
-}
-
-// Large PIN pad optimised for touchscreen
-function PINEntryOverlay({ prompt, onComplete, onCancel }: PINProps) {
-  const [digits, setDigits] = useState<string[]>([]);
-
-  const addDigit = (d: string) => {
-    const next = [...digits, d];
-    if (next.length === 4) {
-      onComplete(next.join(''));
-    } else {
-      setDigits(next);
-    }
-  };
-
-  return (
-    <Modal transparent animationType="fade">
-      <View style={styles.pinOverlay}>
-        <Text style={styles.pinPrompt}>{prompt}</Text>
-        <PINDots filled={digits.length} total={4} />
-        <NumPad onPress={addDigit} onBackspace={() => setDigits(d => d.slice(0, -1))} />
-        <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.cancel}>Cancel</Text>
-        </TouchableOpacity>
-      </View>
-    </Modal>
-  );
-}
-
-// 3×4 number grid — 80×80px keys for reliable finger press
-function NumPad({ onPress, onBackspace }: NumPadProps) {
-  const keys = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
-  return (
-    <View style={styles.numpad}>
-      {keys.map((k, i) => (
-        k === '' ? <View key={i} style={styles.numpadSpacer} /> :
-        k === '⌫' ? (
-          <TouchableOpacity key={i} style={styles.numpadKey} onPress={onBackspace}>
-            <Text style={styles.numpadKeyText}>⌫</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity key={i} style={styles.numpadKey} onPress={() => onPress(k)}>
-            <Text style={styles.numpadKeyText}>{k}</Text>
-          </TouchableOpacity>
-        )
-      ))}
-    </View>
+```dart
+Future<void> requestAlarmDisarm(String pin) async {
+  await panelApi.requestSensitiveAction(
+    action: 'alarm.disarm',
+    factors: {'pin': pin, 'panel_id': panelId},
   );
 }
 ```
@@ -1116,30 +880,11 @@ Face Recognised → Unknown Person:
 
 ### 18.3 Doorbell Handler
 
-```typescript
-// Entry panel doorbell tap
-async function onDoorbellPress() {
-  // 1. Sound chime on all inside speakers via MQTT
-  await mqtt.publish('ai/command', JSON.stringify({
-    action: 'announce_doorbell',
-    parameters: { sound: 'chime', message: 'Someone is at the front door.' }
-  }));
-
-  // 2. Trigger camera event (capture + face detection)
-  await api.triggerCameraCapture({ camera: 'front_door', save: true });
-
-  // 3. Send push notification to all household members
-  await api.broadcastNotification({
-    title: 'Doorbell',
-    body: 'Someone is at the front door.',
-    data: { screen: 'SecurityCameras', camera_id: 'front_door' },
-    category: 'doorbell',
-    image_url: '/api/cameras/front_door/snapshot'
-  });
-
-  // 4. Show visual confirmation on entry panel
-  setDoorbellRung(true);
-  setTimeout(() => setDoorbellRung(false), 5000);
+```dart
+Future<void> handleDoorbell() async {
+  final event = await panelApi.createDoorbellEvent(panelId);
+  await panelApi.notifyResidents(event.id);
+  await voiceSession.joinDoorbellRoom(event.mediaGrant);
 }
 ```
 
@@ -1305,31 +1050,19 @@ Response feedback:
 
 ### 21.2 Gesture Handling
 
-```typescript
-// Swipe gestures for quick navigation
-import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-
-function PanelGestureWrapper({ children }) {
-  const swipeLeft = Gesture.Pan()
-    .onEnd((event) => {
-      if (event.velocityX < -500 && Math.abs(event.velocityX) > Math.abs(event.velocityY)) {
-        navigation.navigate('next-tab');
-      }
-    });
-
-  const swipeUp = Gesture.Pan()
-    .onEnd((event) => {
-      if (event.velocityY < -500 && Math.abs(event.velocityY) > Math.abs(event.velocityX)) {
-        showQuickActions();
-      }
-    });
-
-  const composed = Gesture.Simultaneous(swipeLeft, swipeUp);
-
-  return (
-    <GestureDetector gesture={composed}>
-      {children}
-    </GestureDetector>
+```dart
+class PanelGestureSurface extends StatelessWidget {
+  const PanelGestureSurface({required this.child, super.key});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onHorizontalDragEnd: (details) {
+      if ((details.primaryVelocity ?? 0) < -500) context.go('/next');
+    },
+    onVerticalDragEnd: (details) {
+      if ((details.primaryVelocity ?? 0) < -500) showQuickActions(context);
+    },
+    child: child,
   );
 }
 ```
@@ -1448,25 +1181,14 @@ class NFCController:
 
 All panels share live state via the WebSocket API. When a device is controlled from any panel, all other panels update within 200 ms.
 
-```typescript
-// State synchronisation via shared WebSocket store
-// All panels connect to the same WebSocket hub → same event stream
+```dart
+@riverpod
+class PanelEvents extends _$PanelEvents {
+  @override
+  Stream<PanelEvent> build() => ref.read(panelEventRepositoryProvider).events();
+}
 
-// Panel A: User turns on living room lights
-await api.updateDeviceState('light.living_room_main', { state: 'on', brightness: 80 });
-
-// WebSocket event flows:
-//   1. API updates HA → HA fires state_changed
-//   2. HA bridge forwards to MQTT
-//   3. WebSocket hub broadcasts to ALL connected panels
-//   4. Panel B (kitchen) receives 'devices.state_changed' event
-//   5. Panel B's Zustand store updates deviceStates['light.living_room_main']
-//   6. Panel B's UI re-renders (if that device is visible)
-// Total: < 200 ms
-
-// Conflict resolution: Last Write Wins (LWW) with server timestamp
-// Server always authoritative — panels optimistically update but
-// reconcile with server state on next WebSocket event
+// The server timestamp is authoritative; optimistic state is reconciled on each event.
 ```
 
 ---
@@ -1475,32 +1197,14 @@ await api.updateDeviceState('light.living_room_main', { state: 'on', brightness:
 
 If the panel loses connection to the AI server (network issue, server restart):
 
-```typescript
-// Panel offline behaviour
-function useConnectionState() {
-  const [serverReachable, setServerReachable] = useState(true);
-  const [wsConnected, setWsConnected] = useState(true);
-
-  // Show offline banner when disconnected
-  // Allow viewing cached device states
-  // Disable voice commands (require server)
-  // Disable camera feeds (require server)
-  // Allow local scene activation via MQTT direct (if MQTT reachable)
-
-  return { serverReachable, wsConnected };
-}
-
-// Offline banner
-function ConnectionBanner() {
-  const { serverReachable } = useConnectionState();
-  if (serverReachable) return null;
-  return (
-    <View style={styles.offlineBanner}>
-      <Text style={styles.offlineText}>
-        Offline — showing last known state
-      </Text>
-    </View>
-  );
+```dart
+class ConnectionBanner extends StatelessWidget {
+  const ConnectionBanner({required this.connected, super.key});
+  final bool connected;
+  @override
+  Widget build(BuildContext context) => connected
+      ? const SizedBox.shrink()
+      : const MaterialBanner(content: Text('Offline — controls are unavailable'), actions: []);
 }
 ```
 
@@ -1588,10 +1292,10 @@ function ConnectionBanner() {
 | Approach | Update mechanism | Consistency | Performance |
 |----------|----------------|-------------|------------|
 | **Chromium kiosk (choice)** | Auto (served from server) | Identical across all panels | Very Good |
-| Native app (React Native) | Per-device OTA | Requires deploy to each | Best |
+| Native Flutter Linux app | Per-device package deployment | Requires rollout to each panel | Best |
 | Qt application | Full deploy | Full | Best |
 
-**Decision:** Browser-based UI served from AI server. All 7 panels load the same UI from the server — a single code deployment updates all panels simultaneously. No per-device deployment.
+**Decision:** Flutter Web is served by AI Home OS and displayed by Chromium in kiosk mode. All panels use the same signed, versioned release. Deployment supports a staged rollout, health check, and rollback to the last known-good release. No native application package is installed on each panel.
 
 ### 27.3 Touch vs. Voice-Only Panel
 
@@ -1636,16 +1340,16 @@ Some rooms (bedroom, bathroom) might prefer a voice-only interface with no scree
 1. **Raspberry Pi 5** — https://www.raspberrypi.com/products/raspberry-pi-5/
 2. **Waveshare 10.1" Display** — https://www.waveshare.com/10.1inch-hdmi-lcd-b.htm
 3. **Chromium Kiosk Mode** — https://www.chromium.org/chromium-os/chromium-os-design-docs/
-4. **React 18** — https://react.dev/
-5. **Zustand** — https://github.com/pmndrs/zustand
+4. **Flutter Web** — https://docs.flutter.dev/platform-integration/web
+5. **Riverpod** — https://riverpod.dev/
 6. **Adafruit PN532** — https://learn.adafruit.com/adafruit-pn532-rfid-nfc
 7. **WS2812B LED Control** — https://github.com/jgarff/rpi_ws281x
 8. **HC-SR501 PIR** — https://www.mpja.com/download/31227sc.pdf
 9. **RPi GPIO** — https://gpiozero.readthedocs.io/
 10. **IEC 62366 — Usability** (touch target standards) — https://www.iso.org/standard/69455.html
-11. **Web Speech API** — https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API
-12. **SpiDev Python** — https://github.com/doceme/py-spidev
-13. **Wyoming Protocol** — https://github.com/rhasspy/wyoming
+11. **LiveKit Flutter SDK** — https://docs.livekit.io/home/client/connect/
+12. **LiveKit Agents** — https://docs.livekit.io/agents/
+13. **SpiDev Python** — https://github.com/doceme/py-spidev
 14. **Systemd** — https://systemd.io/
 
 ---
@@ -1656,5 +1360,5 @@ Some rooms (bedroom, bathroom) might prefer a voice-only interface with no scree
 ---
 
 > **Document maintained by:** AI Home OS Architecture Team  
-> **Last updated:** 2026-07-17  
-> **Chapter status:** Draft v1.0 — Open for community review
+> **Last updated:** 2026-09-16
+> **Chapter status:** Draft v1.1 — Flutter Web architecture selected; implementation pending

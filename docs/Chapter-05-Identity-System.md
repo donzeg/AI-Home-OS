@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -69,14 +71,16 @@ The Identity System is not a single sensor or algorithm — it is a **fusion eng
 
 ### 2.1 Probabilistic, Not Binary
 
-Identity is never "definitely Sadiq" or "definitely not Sadiq." It is always a probability. The system maintains confidence scores and actions taken depend on the confidence level:
+Identity recognition is always probabilistic. The system uses recognition confidence for personalization and to prefill an identity during a separate authentication flow:
 
 ```
-Confidence 0.95+ → High certainty → Automatic personalization + security actions
-Confidence 0.70–0.94 → Probable identity → Personalization; confirm before security actions
-Confidence 0.40–0.69 → Possible identity → Ask: "Is that you, Sadiq?"
-Confidence < 0.40 → Unknown → Guest/unknown person flow
+Confidence 0.95+ → High certainty → Full personalization; may prefill authentication identity
+Confidence 0.80–0.94 → Probable identity → Personalization; protect private information
+Confidence 0.60–0.79 → Possible identity → Limited personalization; ask for confirmation
+Confidence < 0.60 → Unknown or ambiguous → Guest/unknown person flow
 ```
+
+No recognition score authorizes a security-sensitive action. Door unlock, alarm disarm, credential management, security configuration, and access to private recordings require deliberate authentication using an approved credential.
 
 ### 2.2 Privacy by Minimum Necessity
 
@@ -97,6 +101,8 @@ This distinction is critical:
 - **Authentication** = has this person proven they are who they claim to be? (cryptographic)
 
 The identity system supports security decisions through confidence scoring, but physical door unlock and sensitive data access require **authentication** — a deliberate action (fingerprint, PIN, NFC card) — not just identity recognition.
+
+Authentication and authorization requirements for every sensitive action are defined exclusively by the Authoritative Sensitive Action Policy in Chapter 11, Section 5.4. This chapter cannot grant permission or define a weaker action-specific exception.
 
 ---
 
@@ -191,126 +197,204 @@ flowchart TD
 
 ## 5. Multi-Modal Confidence Scoring
 
-### 5.1 Bayesian Fusion Model
+### 5.1 Confidence Fusion Model
 
-The identity fusion engine uses a Bayesian approach to combine multiple signals. Each signal provides evidence for or against each person hypothesis.
+The identity fusion engine combines current observations for each person hypothesis. It uses each observation's confidence and age, prevents repeated readings from accumulating indefinitely, and discounts signals that measure the same underlying evidence.
+
+The values below are initial engineering parameters, not proven probabilities. They must be calibrated with representative deployment data and evaluated against documented false-acceptance and false-rejection targets before production use.
 
 ```python
 # Identity confidence fusion (pseudo-code)
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import List
 import math
+import time
 
 @dataclass
 class IdentitySignal:
-    source: str           # 'face', 'voice', 'ble', 'uwb', 'wifi', 'rfid'
-    person_id: str        # who this signal says it is
-    confidence: float     # 0.0–1.0 signal-level confidence
-    timestamp: float      # unix timestamp
+    source: str           # face, voice, BLE, UWB, WiFi, RFID, fingerprint
+    source_id: str        # camera, microphone, reader, or scanner
+    correlation_id: str   # underlying credential/device; same phone across BLE/WiFi
+    person_id: str        # person claimed by this observation
+    confidence: float     # 0.0–1.0 confidence for this observation
+    timestamp: float      # Unix timestamp
     location: str         # room or camera zone
-    ttl: int              # seconds before this signal expires
+    ttl: int              # seconds before this observation expires
 
 class IdentityFusionEngine:
-    # Signal reliability weights (tuned empirically)
-    SIGNAL_WEIGHTS = {
-        'rfid':        0.95,  # Very reliable (explicit action, unique token)
-        'fingerprint': 0.98,  # Most reliable (biometric + deliberate)
-        'face_high':   0.92,  # High-confidence face match
-        'face_medium': 0.75,  # Medium-confidence face match
-        'voice_high':  0.85,  # High-confidence voice match
-        'voice_medium':0.65,  # Medium-confidence voice match
-        'uwb':         0.88,  # UWB (device, not biometric — slightly lower)
-        'ble_strong':  0.72,  # Strong BLE RSSI (close to scanner)
-        'ble_weak':    0.45,  # Weak BLE RSSI (could be from adjacent room)
-        'wearable':    0.80,  # Wearable (unique device, usually on person)
-        'wifi':        0.40,  # WiFi (device at home, not necessarily carried)
+    # Baseline source reliability; calibrate per deployment.
+    SOURCE_RELIABILITY = {
+        'rfid': 0.95, 'fingerprint': 0.98,
+        'face': 0.85, 'voice': 0.78,
+        'uwb': 0.80, 'ble': 0.68,
+        'wearable': 0.75, 'wifi': 0.58,
     }
 
-    def compute_identity_confidence(
-        self,
-        person_id: str,
-        active_signals: List[IdentitySignal]
-    ) -> float:
-        """
-        Compute fused confidence that active_signals match person_id.
-        Uses log-odds Bayesian fusion.
-        """
-        # Prior: uniform (no preference before signals)
-        log_odds = 0.0
+    # Signals in one group are correlated. For example, BLE, WiFi, and UWB
+    # may all report possession of the same registered phone.
+    EVIDENCE_GROUP = {
+        'face': 'visual_biometric',
+        'voice': 'audio_biometric',
+        'ble': 'possessed_device',
+        'wifi': 'possessed_device',
+        'uwb': 'possessed_device',
+        'wearable': 'possessed_device',
+        'rfid': 'deliberate_credential',
+        'fingerprint': 'deliberate_credential',
+    }
 
-        for signal in active_signals:
-            if signal.is_expired():
-                continue
-            weight_key = self._get_weight_key(signal)
-            weight = self.SIGNAL_WEIGHTS.get(weight_key, 0.5)
+    MIN_RECOGNITION_SCORE = 0.60
+    MIN_WINNER_MARGIN = 0.15
+
+    def deduplicate(self, signals: List[IdentitySignal]) -> List[IdentitySignal]:
+        """Keep the newest observation per source device and person."""
+        newest = {}
+        for signal in signals:
+            key = (
+                signal.source,
+                signal.source_id,
+                signal.correlation_id,
+                signal.person_id,
+            )
+            if key not in newest or signal.timestamp > newest[key].timestamp:
+                newest[key] = signal
+        return list(newest.values())
+
+    def effective_reliability(self, signal, group_rank, now) -> float:
+        """Combine source quality, observation confidence, age, and correlation."""
+        age = max(0.0, now - signal.timestamp)
+        freshness = max(0.0, 1.0 - age / signal.ttl)
+        correlation_discount = 1.0 if group_rank == 0 else 0.35 ** group_rank
+        reliability = (
+            self.SOURCE_RELIABILITY.get(signal.source, 0.50)
+            * min(max(signal.confidence, 0.0), 1.0)
+            * freshness
+            * correlation_discount
+        )
+        return min(max(reliability, 0.01), 0.99)
+
+    def compute_identity_confidence(self, person_id, active_signals) -> float:
+        """
+        Compute recognition confidence for one candidate. This supports
+        personalization only and is not an authentication result.
+        """
+        now = time.time()
+        current = [
+            signal for signal in self.deduplicate(active_signals)
+            if now - signal.timestamp <= signal.ttl
+        ]
+        current.sort(key=lambda signal: signal.confidence, reverse=True)
+
+        log_odds = 0.0
+        group_counts = {}
+        for signal in current:
+            group = self.EVIDENCE_GROUP.get(signal.source, signal.source)
+            # Only observations tied to the same underlying credential/device
+            # share a correlation discount.
+            correlation_key = (group, signal.correlation_id)
+            rank = group_counts.get(correlation_key, 0)
+            reliability = self.effective_reliability(signal, rank, now)
+            group_counts[correlation_key] = rank + 1
+            evidence = math.log(reliability / (1 - reliability))
 
             if signal.person_id == person_id:
-                # This signal supports this person
-                log_odds += math.log(weight / (1 - weight))
+                log_odds += evidence
             else:
-                # This signal contradicts this person
-                log_odds -= math.log(weight / (1 - weight)) * 0.5
+                log_odds -= max(evidence, 0.0) * 0.5
 
-        # Convert log-odds to probability
         probability = 1.0 / (1.0 + math.exp(-log_odds))
         return min(max(probability, 0.01), 0.99)
 
-    def get_most_likely_person(
-        self,
-        active_signals: List[IdentitySignal],
-        location: str
-    ) -> IdentityResult:
-        """Find the most likely person given all active signals."""
-        scores = {}
-        for person in self.get_all_persons():
-            # Only consider signals from the same location
-            location_signals = [s for s in active_signals
-                                 if s.location == location or s.location == 'global']
-            scores[person.id] = self.compute_identity_confidence(
-                person.id, location_signals
-            )
+    def get_most_likely_person(self, active_signals, location) -> IdentityResult:
+        """Return a recognized person or an explicit unknown result."""
+        signals = [
+            signal for signal in active_signals
+            if signal.location in (location, 'global')
+        ]
+        if not signals:
+            return IdentityResult.unknown(reason='no_current_evidence')
 
-        best_person_id = max(scores, key=scores.get)
-        best_confidence = scores[best_person_id]
+        strong_biometric_claims = {
+            signal.person_id for signal in signals
+            if signal.source in ('face', 'voice')
+            and signal.confidence >= 0.85
+            and time.time() - signal.timestamp <= signal.ttl
+        }
+        if len(strong_biometric_claims) > 1:
+            audit_log.record(
+                'identity_evidence_conflict',
+                location=location,
+                claimed_person_ids=sorted(strong_biometric_claims),
+            )
+            return IdentityResult.unknown(reason='conflicting_biometrics')
+
+        people = self.get_all_persons()
+        if not people:
+            return IdentityResult.unknown(reason='no_registered_people')
+
+        scores = {
+            person.id: self.compute_identity_confidence(person.id, signals)
+            for person in people
+        }
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        best_id, best_score = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+
+        if best_score < self.MIN_RECOGNITION_SCORE:
+            return IdentityResult.unknown(reason='insufficient_evidence')
+        if best_score - second_score < self.MIN_WINNER_MARGIN:
+            return IdentityResult.unknown(reason='ambiguous_candidates')
 
         return IdentityResult(
-            person_id=best_person_id,
-            confidence=best_confidence,
-            certainty=self._confidence_to_certainty(best_confidence),
-            active_signals=[s.source for s in active_signals]
+            person_id=best_id,
+            confidence=best_score,
+            certainty=self._confidence_to_certainty(best_score),
+            active_signals=[signal.source for signal in signals],
+            authenticated=False,
         )
 ```
 
-### 5.2 Confidence Tiers and Actions
+`authenticated=False` is intentional. Recognition may select the account to personalize or prefill during authentication. Only the authentication service can produce an authenticated principal for a sensitive action.
 
-| Confidence | Label | AI Behavior |
-|------------|-------|-------------|
-| 0.95–1.00 | **Certain** | Full personalization + automatic security actions |
-| 0.80–0.94 | **High** | Full personalization; confirm before door unlock |
-| 0.60–0.79 | **Probable** | Limited personalization; "Is that you, [name]?" for security |
-| 0.40–0.59 | **Possible** | Generic greeting; ask for confirmation |
-| < 0.40 | **Unknown** | Unknown/guest flow; no personalization |
+### 5.2 Confidence Tiers and Permitted Behavior
+
+| Confidence | Label | Permitted behavior |
+|------------|-------|--------------------|
+| 0.95–1.00 | **High certainty** | Full personalization; may prefill the claimed identity in a separate authentication flow |
+| 0.80–0.94 | **Probable** | Personalization; require confirmation before showing private information |
+| 0.60–0.79 | **Possible** | Limited personalization; ask the person to confirm their identity |
+| < 0.60 | **Unknown** | Guest/unknown flow; no personal information |
+
+Recognition confidence never grants permission for security-sensitive actions. Exterior door unlock, alarm disarm, credential management, security configuration, and access to private recordings require fresh, deliberate authentication through an approved credential such as a fingerprint, PIN, or NFC token. Authorization is evaluated separately against the authenticated person's role and permissions.
 
 ### 5.3 Signal Expiry and Decay
 
-Signals expire and their contribution to confidence decays over time:
+Signals expire and their contribution to confidence decays continuously:
 
 ```python
-# Signal TTL values (seconds)
 SIGNAL_TTL = {
-    'rfid':        300,    # RFID swipe: 5 minutes (explicit event)
-    'fingerprint': 300,
-    'face':        120,    # Face detection: 2 minutes (last seen)
-    'voice':       300,    # Voice: 5 minutes
-    'ble':         30,     # BLE RSSI: 30 seconds (must be continuously re-detected)
-    'uwb':         10,     # UWB: 10 seconds (very fresh)
-    'wearable':    60,     # Wearable: 1 minute
-    'wifi':        300,    # WiFi probe: 5 minutes
+    'rfid': 300, 'fingerprint': 300,
+    'face': 120, 'voice': 300,
+    'ble': 30, 'uwb': 10,
+    'wearable': 60, 'wifi': 300,
 }
 ```
 
-When all signals for a person expire, their confidence drops to zero — they are considered "left" or "location unknown."
+Expired signals do not contribute to recognition. When no current evidence remains, the engine returns `unknown`. Presence logic separately determines whether the person has left or whether their location is unknown.
+
+### 5.4 Validation Requirements
+
+Before deployment, the fusion model must demonstrate that:
+
+1. Repeated readings from one source do not increase confidence indefinitely.
+2. BLE, WiFi, UWB, and wearable observations tied to the same possessed device are not treated as independent proofs.
+3. Weak biometric evidence cannot reach high certainty solely through device proximity.
+4. Close scores for two candidates return `unknown` instead of selecting an arbitrary winner.
+5. Expired observations contribute no evidence.
+6. Contradictory strong biometric observations return `unknown` and create an audit event.
+7. No recognition score can authorize an exterior unlock, alarm disarm, or other security-sensitive action.
+8. Thresholds are calibrated against documented false-acceptance and false-rejection targets using representative household data.
 
 ---
 
@@ -1148,7 +1232,7 @@ Any registered person can request complete deletion of their identity data:
 
 ```python
 def delete_person_data(self, person_id: str, requester_id: str):
-    """GDPR-compliant deletion of all person data."""
+    """Execute the approved person-data deletion workflow; compliance requires separate deployment-specific verification."""
     # Only primary admin or the person themselves can delete
     if requester_id != person_id and not is_admin(requester_id):
         raise PermissionError("Unauthorized deletion request")
@@ -1313,7 +1397,7 @@ GROUP BY 1, person_id, room;
 |------|-------------|--------|------------|
 | False identity match → wrong personalization | Medium | Low | Confidence thresholds; biometric confirmation for high-stakes |
 | Biometric data breach | Low | Very High | Encrypted storage; embeddings only (not raw images); access control |
-| BLE spoofing (attacker replicates beacon MAC) | Low | Medium | Biometric confirmation required for security actions; BLE-only insufficient for access control |
+| BLE spoofing (attacker replicates beacon MAC) | Low | Medium | Fresh approved credential authentication required for security actions; BLE-only insufficient for access control |
 | Twin/lookalike person confusion | Very Low | Low | Multi-modal fusion; voice + face required for high confidence |
 | Child's phone triggering parent's identity | Low | Low | Per-device registration; child profiles separate |
 | Tracking without consent (domestic abuse concern) | Low | Very High | Clear consent UI; user can check what signals are active; hard mute |

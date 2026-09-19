@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -41,7 +43,7 @@
 
 ## 1. Overview
 
-The AI Reasoning Engine is the **cognitive core** of AI Home OS — the layer that transforms raw sensor data, memory, and user intent into intelligent action. It is implemented as a **multi-agent system**: a coordinated collection of specialized AI agents, each with a defined domain, a set of tools, and access to the shared memory and context layer.
+The proposed AI Reasoning Engine is the **cognitive core** of AI Home OS — the layer intended to transform raw sensor data, memory, and user intent into intelligent action. It is designed as a **multi-agent system**: a coordinated collection of specialized AI agents, each with a defined domain, a set of tools, and access to the shared memory and context layer.
 
 This design is modeled on the JARVIS architecture from Iron Man — not a single omniscient AI, but an orchestrated team of specialist intelligences under a central coordinator that handles delegation, conflict resolution, and final decision authority.
 
@@ -333,7 +335,7 @@ Rules:
 - Keep responses under 3 sentences unless detail is requested
 - For device commands, confirm what you did in past tense
 - For ambiguous commands, ask one clarifying question
-- For dangerous actions (door unlock, alarm disable), require explicit confirmation
+- For sensitive actions, create a request for the Chapter 11 Sensitive Action Gateway; confirmation never substitutes for authentication
 ```
 
 ### 6.3 Response Pipeline
@@ -406,7 +408,7 @@ Planning Agent generates:
   5. [18:50] Set dining room lights to dinner scene (warm, 40%)
   6. [19:00] Play ambient dinner music (playlist: "Dinner Jazz") at 30%
   7. [19:00] Set entry hall lights to welcome mode
-  8. [19:00] Unlock front door latch for 15 minutes (guest access mode)
+  8. [Before accepting plan] Ask the owner to create a time-limited guest credential through the authenticated access workflow; do not schedule an unlock
   9. [21:00] Offer to change music genre (proactive check-in)
 ```
 
@@ -536,10 +538,10 @@ class SecurityAgent:
 | Door opened (all away) | MEDIUM | Notify + photo |
 | Failed fingerprint (3× in 5 min) | MEDIUM | Notify + lock door |
 | Unknown face repeatedly detected | LOW | Notify next morning |
-| Carbon monoxide alert | CRITICAL | Evacuate + call 112 |
-| Smoke/fire alarm | CRITICAL | Unlock doors + lights + 112 |
+| Carbon monoxide alert | CRITICAL | Notify local safety controller; announce evacuation |
+| Smoke/fire alarm | CRITICAL | Notify local safety controller; announce evacuation |
 | Glass break sensor | HIGH | Notify + lock |
-| Alarm tamper | CRITICAL | Notify + 112 |
+| Alarm tamper | CRITICAL | Notify configured emergency contacts according to the site safety plan |
 
 ### 8.4 Alarm Integration
 
@@ -549,21 +551,13 @@ The Security Agent interfaces with the home alarm system (DSC, Paradox, Bosch, o
 class AlarmController:
     STATES = ['disarmed', 'armed_away', 'armed_home', 'armed_night', 'triggered']
 
-    async def arm(self, mode: str, requester: str, requester_confidence: float):
-        # Require high identity confidence for security actions
-        if requester_confidence < 0.80:
-            raise SecurityError("Identity confidence too low for alarm control")
-
-        # Require that person has permission
-        person = await identity.get_person(requester)
-        if not person.can_arm_disarm_security:
-            raise PermissionError(f"{requester} does not have alarm access")
-
-        await ha.set_alarm_state(mode)
-        await audit_log.record(
-            action=f"alarm_armed_{mode}",
-            person=requester,
-            confidence=requester_confidence
+    async def request_arm(self, mode: str, request_context: RequestContext):
+        # The agent can request the workflow but cannot authorize or execute it.
+        return await sensitive_action_gateway.request(
+            canonical_action='alarm.arm',
+            target=mode,
+            initiator='llm_request',
+            context=request_context,
         )
 ```
 
@@ -777,14 +771,9 @@ class AutomationAgent:
                 domain='climate', service='set_temperature',
                 data={'entity_id': command.entity_id, 'temperature': command.params['temperature']}
             ),
-            'lock_door': ServiceCall(
-                domain='lock', service='lock',
-                data={'entity_id': command.entity_id}
-            ),
-            'unlock_door': ServiceCall(
-                domain='lock', service='unlock',
-                data={'entity_id': command.entity_id}
-            ),
+            # Sensitive actions such as exterior lock and unlock are
+            # deliberately absent. They
+            # must go through the Chapter 11 Sensitive Action Gateway.
         }
         return COMMAND_MAP.get(command.action_type)
 ```
@@ -1129,18 +1118,19 @@ DEVICE_TOOLS = [
     ),
     Tool(
         name="lock_door",
-        description="Lock an exterior door.",
+        description="Start the authorized exterior-door lock workflow.",
         parameters={"entity_id": "string"},
-        function=automation_agent.lock_door,
-        requires_permission="resident"
+        function=sensitive_action_gateway.request,
+        execution_mode="request_only",
+        policy_action="lock.exterior",
     ),
     Tool(
         name="unlock_door",
-        description="Unlock an exterior door. Requires explicit confirmation for security.",
+        description="Start the authenticated exterior-door unlock workflow.",
         parameters={"entity_id": "string", "duration_minutes": "integer (optional)"},
-        function=automation_agent.unlock_door,
-        requires_confirmation=True,
-        requires_permission="admin"
+        function=sensitive_action_gateway.request,
+        execution_mode="request_only",
+        policy_action="unlock.exterior",
     ),
     Tool(
         name="set_temperature",
@@ -1333,29 +1323,13 @@ Persons home: {persons_with_rooms}
 {privacy_constraints}
 ```
 
-### 21.2 Prompt Injection Prevention
+### 21.2 Prompt Injection Risk Controls
 
-All user input (transcribed speech, text from sensors) is sanitized before insertion into prompts:
+Text from users, sensors, calendars, memory retrieval, websites, plugins, and tool results is untrusted data. It is tagged with its source and permitted purpose and passed in typed data fields separate from trusted system policy. It cannot define tool permissions, supply credentials, or promote itself to an instruction.
 
-```python
-INJECTION_PATTERNS = [
-    r"(?i)ignore (all )?previous instructions",
-    r"(?i)you are now",
-    r"(?i)system prompt",
-    r"(?i)disregard your",
-    r"\[INST\]",
-    r"<\|system\|>",
-    r"<\|im_start\|>",
-    r"(?i)pretend you are",
-    r"(?i)forget everything",
-    r"(?i)override (all )?safety",
-]
+Pattern matching and input-length limits may flag obvious attacks for audit or additional review, but a clean match result never establishes safety. Every agent receives a deny-by-default capability set scoped to the authenticated principal and current task. Tool calls require strict schemas and authorized resource identifiers; returned content retains its trust label. Policy-owning services validate side effects, and every sensitive request is routed to the Chapter 11 Section 5.4 Sensitive Action Gateway.
 
-def sanitize_user_input(text: str) -> str:
-    for pattern in INJECTION_PATTERNS:
-        text = re.sub(pattern, "[INPUT FILTERED]", text)
-    return text[:2000]  # Hard length limit
-```
+The required adversarial evaluation includes direct and indirect injections across every context source. Tests verify that injected text cannot broaden tool access, retrieve unrelated private data, bypass authentication or confirmation, or trigger a sensitive action. Chapter 11, Section 11.1 defines the authoritative controls and validation expectations.
 
 ---
 
@@ -1374,17 +1348,18 @@ class SafetyChecker:
         'share_data_externally',    # Not allowed without explicit consent
     ]
 
-    HIGH_RISK_ACTIONS = [
-        'unlock_door',              # Require high identity confidence
-        'arm_disarm_alarm',         # Require high identity confidence
-        'disable_safety_sensor',    # Require explicit confirmation
-        'open_gas_valve',           # Require explicit confirmation
-    ]
+    SENSITIVE_ACTIONS = {
+        'unlock_door': 'unlock.exterior',
+        'arm_alarm': 'alarm.arm',
+        'disarm_alarm': 'alarm.disarm',
+        'disable_safety_sensor': 'security.settings.change',
+        'open_gas_valve': 'security.settings.change',
+    }
 
     async def validate(
         self,
         actions: List[AgentAction],
-        requester_confidence: float
+        request_context: RequestContext
     ) -> ValidationResult:
         for action in actions:
             # Block absolutely disallowed actions
@@ -1394,20 +1369,14 @@ class SafetyChecker:
                     reason=f"Action '{action.type}' is not permitted"
                 )
 
-            # High-risk actions require high identity confidence
-            if action.type in self.HIGH_RISK_ACTIONS:
-                if requester_confidence < 0.80:
-                    return ValidationResult(
-                        approved=False,
-                        reason="Identity confidence too low for this action",
-                        requires_explicit_confirmation=True
-                    )
-
-            # Time-of-day restrictions
-            if action.type == 'unlock_door' and is_night_mode():
+            # The LLM may request a sensitive workflow but cannot approve or
+            # execute it. Chapter 11 applies authentication, authorization,
+            # targeted confirmation, initiator, context, and freshness rules.
+            if action.type in self.SENSITIVE_ACTIONS:
                 return ValidationResult(
                     approved=False,
-                    reason="Door unlock during night mode requires voice confirmation"
+                    reason="Sensitive Action Gateway required",
+                    route_to_policy=self.SENSITIVE_ACTIONS[action.type],
                 )
 
         return ValidationResult(approved=True)
@@ -1497,7 +1466,7 @@ homeios_reasoning_errors_total{agent, error_type}
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
 | LLM hallucination leads to wrong device command | Medium | Medium | Tool validation; action confirmation for high-risk commands; safety checker |
-| Prompt injection via sensor data or voice | Low | High | Input sanitization; output schema validation; blocked action list |
+| Direct or indirect prompt injection through voice, sensors, memory, calendar, web, plugin, or tool content | Medium | High | Source trust labels; instruction/data separation; deny-by-default capabilities; strict schemas; policy-owned execution; Sensitive Action Gateway; adversarial tests |
 | Agent coordination loop (agents ping each other indefinitely) | Low | Medium | Max step limits; circuit breakers in coordinator |
 | LLM latency too high for time-critical events | Low | High | Pre-defined fast paths for emergency events (bypass LLM); Phi-4 for simple commands |
 | Cloud LLM sends sensitive home data externally | Very Low | High | Explicit allowlist of data types allowed to cloud; no biometric or health data |

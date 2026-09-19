@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -105,8 +107,8 @@ The system treats user manual overrides as learning signals — if the user over
 ```mermaid
 flowchart TB
     subgraph L1["Level 1 — Safety Rules (Always Run)"]
-        S1["Smoke alarm → unlock doors + max lights"]
-        S2["CO alarm → unlock + 112"]
+        S1["Verified smoke alarm → local safety controller evacuation plan"]
+        S2["Verified CO alarm → local safety controller evacuation plan"]
         S3["Flood sensor → close water valve"]
         S4["High temp >45°C → shut down non-essential"]
     end
@@ -471,6 +473,8 @@ class ActionType(str, Enum):
     DELAY               = "delay"              # Wait N seconds between actions
     CONDITION_CHECK     = "condition_check"    # Inline condition inside action sequence
 ```
+
+The presence of an action type does not grant permission to execute it. `UNLOCK_DOOR`, `ARM_ALARM`, and `DISARM_ALARM` are routed to the Authoritative Sensitive Action Policy in Chapter 11, Section 5.4. General automations cannot unlock exterior doors or disarm alarms. Approved deterministic alarm-arming rules use a registered service identity. Emergency evacuation unlocking exists only inside the isolated local safety controller.
 
 ### 7.2 Action Executor
 
@@ -1470,30 +1474,22 @@ CREATE TABLE inhibit_rules (
 | Failure | Impact | Detection | Recovery |
 |---------|--------|-----------|---------|
 | Automation Engine crash | No automations run | Docker health check | Restart; HA safety rules still execute independently |
-| HA unavailable | Actions not executed | HTTP timeout | Queue actions; retry with exponential backoff; alert |
+| HA unavailable | Actions not executed | HTTP timeout | Apply the Chapter 12 delivery policy; never queue unlock or alarm-disarm requests; alert |
 | Trigger missed (MQTT disconnect) | Automation doesn't fire | MQTT Last Will; reconnect handler | Reconnect + replay recent MQTT events from buffer |
-| Condition evaluator crash | All automations blocked | Health check | Restart; default to pass all conditions for safety-level automations |
+| Condition evaluator crash | Conditions cannot be established | Health check | Fail closed and block affected automations; restart evaluator; independent local safety controller continues its separately validated life-safety rules |
 | Conflict resolver deadlock | Actions not executed | Timeout detector | Default to safety priority; log deadlock for investigation |
 
 ### 20.1 Home Assistant Offline Fallback
 
-When HA is temporarily unavailable, the Automation Engine queues non-critical actions and retries:
+When HA is temporarily unavailable, the Automation Engine delegates to the Chapter 12 delivery-policy queue. Only policy-approved, expiring, retry-safe actions may be retried; security-sensitive actions fail closed.
 
 ```python
 class ActionQueue:
-    MAX_RETRY = 3
-    RETRY_DELAY_SECONDS = 30
-
-    async def enqueue_with_retry(self, action: Action):
-        for attempt in range(self.MAX_RETRY):
-            try:
-                await self.executor.execute_single(action)
-                return
-            except HAConnectionError:
-                if attempt < self.MAX_RETRY - 1:
-                    await asyncio.sleep(self.RETRY_DELAY_SECONDS * (2 ** attempt))
-                else:
-                    await audit_log.record_failure(action, "HA unavailable after retries")
+    async def handle_ha_unavailable(self, action: Action) -> CommandOutcome:
+        command = action_policy_registry.to_ha_command(action)
+        # The shared Chapter 12 queue rejects unregistered, sensitive,
+        # non-idempotent, expired, or incorrectly classified actions.
+        return await ha_retry_queue.handle_unavailable(command)
 ```
 
 ---

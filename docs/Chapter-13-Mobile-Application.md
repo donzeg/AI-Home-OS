@@ -2,8 +2,12 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
-**Date:** 2026-07-17
+**Status:** Draft specification v1.1
+**Date:** 2026-09-16
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
+
+> **Framework decision:** Flutter is the client presentation framework. It does not run the AI, automation, authorization, or device-control backend. Android, iOS, wall-panel web, and application-style administration targets share selected Dart packages while retaining separate permissions and navigation.
 
 ---
 
@@ -26,7 +30,7 @@
 15. [Screen: Notifications & Alerts](#15-screen-notifications--alerts)
 16. [Screen: Settings](#16-screen-settings)
 17. [State Management](#17-state-management)
-18. [Real-Time Data (WebSocket)](#18-real-time-data-websocket)
+18. [Real-Time Control Data (WebSocket)](#18-real-time-control-data-websocket)
 19. [Offline Mode](#19-offline-mode)
 20. [Push Notifications](#20-push-notifications)
 21. [Biometric Authentication](#21-biometric-authentication)
@@ -57,7 +61,9 @@ The AI Home OS mobile app is the primary interface for household members to inte
 | **Security** | Live camera feeds, alert management, alarm control |
 | **Notifications** | Real-time alerts, energy reports, presence events |
 | **Presence** | See where each family member is (home/away/room) |
-| **Offline mode** | View cached state and queue commands when away from VPN |
+| **Offline mode** | View cached state; new actions wait for connectivity and then follow the server-owned delivery policy |
+
+The mobile application is a resident interface rather than the infrastructure administration console. Initial setup, Home Assistant entity mapping, service health, backup/recovery, provider configuration, and platform-wide audit inspection belong to the administration web application defined in Chapter 17.
 
 ---
 
@@ -130,21 +136,21 @@ Data/Numbers:
 
 | Concern | Choice | Rationale |
 |---------|--------|-----------|
-| **Framework** | React Native (Expo SDK 52) | Single codebase for iOS + Android; large ecosystem; strong navigation |
-| **Language** | TypeScript | Type safety; better IDE support; catches errors at compile time |
-| **Navigation** | React Navigation 7 (native stack) | Native transitions; screen tracking |
-| **State** | Zustand + React Query | Zustand for global UI state; React Query for server state + caching |
-| **WebSocket** | Native WebSocket + reconnecting wrapper | Real-time device/energy/presence updates |
-| **HTTP client** | Axios (with interceptors) | JWT auto-refresh; retry; request logging |
-| **Local DB** | WatermelonDB (SQLite) | Efficient offline caching of home state |
-| **Voice** | Expo Audio + WebSocket streaming | Mic access → stream to Wyoming/JARVIS |
-| **Push notifications** | Expo Notifications + APNs + FCM | Cross-platform push |
-| **Biometrics** | Expo LocalAuthentication | FaceID / TouchID / fingerprint |
-| **VPN** | WireGuard-kt / NetworkExtension | In-app VPN tunnel activation (optional) |
-| **Camera streaming** | WebRTC (react-native-webrtc) | Low-latency live camera feed |
-| **Charts** | Victory Native (SVG) | Energy charts, flat design, no gradient fills |
-| **Icons** | Lucide React Native | Consistent, clear icon set |
-| **Testing** | Jest + React Native Testing Library + Detox | Unit + integration + E2E |
+| **Framework** | Flutter | Shared application framework for Android, iOS, tablets, wall panels, web, and possible desktop clients |
+| **Language** | Dart | Sound null safety, ahead-of-time mobile compilation, and one language across supported clients |
+| **Navigation** | `go_router` | Declarative routes, deep links, guarded routes, and restoration |
+| **State** | Riverpod | Testable dependency injection and explicit asynchronous state |
+| **WebSocket** | `web_socket_channel` behind a repository | Control-plane device, energy, and presence updates |
+| **HTTP client** | Dio behind a typed API client | JWT refresh, retry policy, cancellation, and request tracing |
+| **Local DB** | Drift on SQLite | Typed offline cache, migrations, and observable queries |
+| **Voice** | LiveKit Flutter SDK | Full-duplex WebRTC through the self-hosted media plane |
+| **Push notifications** | Firebase Messaging with APNs/FCM adapters | Cross-platform push delivery; the server remains authoritative |
+| **Biometrics** | `local_auth` | Face ID, Touch ID, and Android biometrics for local confirmation |
+| **Secrets** | `flutter_secure_storage` | OS-backed storage for refresh tokens and device credentials |
+| **Camera streaming** | WebRTC through a camera-session abstraction | Low-latency feeds without exposing camera credentials |
+| **Charts** | Custom painters or a vetted Flutter chart package | Accessible energy charts with flat, solid styling |
+| **Icons** | Material Symbols plus project-owned SVG assets | Consistent icons without binding the design system to React packages |
+| **Testing** | Dart tests, Flutter widget tests, and `integration_test` | Unit, component, accessibility, and end-to-end coverage |
 
 ---
 
@@ -152,45 +158,46 @@ Data/Numbers:
 
 ```mermaid
 flowchart TD
-    subgraph UI["UI Layer (React Native)"]
+    subgraph UI["Flutter Presentation Layer"]
         SCREENS["Screens"]
         COMPONENTS["Shared Components"]
-        NAVIGATION["Navigation"]
+        NAVIGATION["go_router"]
     end
 
     subgraph STATE["State Layer"]
-        ZUSTAND["Zustand Store\n(UI state, auth, settings)"]
-        REACT_QUERY["React Query\n(server state + caching)"]
-        WS_STORE["WebSocket Store\n(live device states)"]
+        RIVERPOD["Riverpod Providers\n(UI, auth, server and live state)"]
+        REPOSITORIES["Repositories\n(API, cache and stream policy)"]
+        WS_STATE["Live State Providers\n(device, energy and presence)"]
     end
 
     subgraph SERVICES["Service Layer"]
-        API_CLIENT["API Client\n(Axios + JWT refresh)"]
+        API_CLIENT["Typed API Client\n(Dio + JWT refresh)"]
         WS_CLIENT["WebSocket Client\n(auto-reconnect)"]
-        VOICE_SERVICE["Voice Service\n(mic → JARVIS)"]
+        VOICE_SERVICE["Voice Session Service\n(LiveKit SDK)"]
         NOTIF_SERVICE["Notification Service"]
-        LOCAL_DB["Local DB\n(WatermelonDB)"]
+        LOCAL_DB["Local DB\n(Drift + SQLite)"]
         BIOMETRICS["Biometric Auth"]
     end
 
     subgraph BACKEND["Backend (via WireGuard or internet)"]
         REST_API["REST API\n(/v1/...)"]
         WS_API["WebSocket\n(/v1/ws)"]
-        VOICE_API["Voice API\n(Wyoming / WebSocket)"]
+        VOICE_SESSION_API["Voice Session API\n(/v1/voice/sessions)"]
+        LIVEKIT["Self-hosted LiveKit\n(WebRTC media)"]
     end
 
-    SCREENS --> ZUSTAND
-    SCREENS --> REACT_QUERY
-    SCREENS --> WS_STORE
-
-    REACT_QUERY --> API_CLIENT
-    WS_STORE --> WS_CLIENT
-    ZUSTAND --> LOCAL_DB
-    ZUSTAND --> BIOMETRICS
+    SCREENS --> RIVERPOD
+    SCREENS --> WS_STATE
+    RIVERPOD --> REPOSITORIES
+    REPOSITORIES --> API_CLIENT
+    REPOSITORIES --> LOCAL_DB
+    WS_STATE --> WS_CLIENT
+    RIVERPOD --> BIOMETRICS
 
     API_CLIENT --> REST_API
     WS_CLIENT --> WS_API
-    VOICE_SERVICE --> VOICE_API
+    VOICE_SERVICE --> VOICE_SESSION_API
+    VOICE_SERVICE <--> LIVEKIT
     NOTIF_SERVICE --> BACKEND
 ```
 
@@ -316,68 +323,22 @@ Button: solid #3498DB, rounded 12px
 
 ### 6.4 Authentication Flow (Code)
 
-```typescript
-// src/screens/auth/LoginScreen.tsx
+```dart
+// Authentication is coordinated by Riverpod; tokens stay in secure storage.
+final authControllerProvider = AsyncNotifierProvider<AuthController, AuthSession?>(
+  AuthController.new,
+);
 
-export function LoginScreen() {
-  const { login, loginWithBiometrics } = useAuthStore();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+class AuthController extends AsyncNotifier<AuthSession?> {
+  @override
+  Future<AuthSession?> build() => ref.read(authRepositoryProvider).restore();
 
-  const handleLogin = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await login(email, password);
-      if (result.requires_mfa) {
-        navigation.navigate('MFA', { session_token: result.session_token });
-      } else {
-        navigation.replace('Main');
-      }
-    } catch (e: any) {
-      setError(e.message || 'Sign-in failed. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleBiometricLogin = async () => {
-    const result = await loginWithBiometrics();
-    if (result.success) {
-      navigation.replace('Main');
-    } else {
-      setError('Biometric authentication failed');
-    }
-  };
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Sign in</Text>
-
-      <TextInput
-        style={styles.input}
-        value={email}
-        onChangeText={setEmail}
-        placeholder="Email or username"
-        autoCapitalize="none"
-        keyboardType="email-address"
-        placeholderTextColor={colors.secondary}
-      />
-      <PasswordInput value={password} onChange={setPassword} />
-
-      {error && <ErrorBanner message={error} />}
-
-      <PrimaryButton
-        title="Sign In"
-        onPress={handleLogin}
-        loading={loading}
-      />
-
-      <BiometricButton onPress={handleBiometricLogin} />
-    </SafeAreaView>
-  );
+  Future<void> signIn(String email, String password) async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(
+      () => ref.read(authRepositoryProvider).signIn(email, password),
+    );
+  }
 }
 ```
 
@@ -428,84 +389,34 @@ The Home Dashboard is the **primary screen** — users see it immediately after 
 
 ### 7.2 Home Dashboard Implementation
 
-```typescript
-// src/screens/home/HomeScreen.tsx
+```dart
+class HomeDashboard extends ConsumerWidget {
+  const HomeDashboard({super.key});
 
-export function HomeScreen() {
-  const { data: homeState, isLoading } = useQuery({
-    queryKey: ['home-state'],
-    queryFn: api.getHomeState,
-    refetchInterval: 60_000,       // Fallback poll every 60s
-    staleTime: 30_000,             // Consider stale after 30s
-  });
-
-  // Live updates via WebSocket (primary source of truth)
-  const liveState = useWebSocketStore(s => s.homeState);
-  const state = liveState ?? homeState;
-
-  const { data: energyNow } = useQuery({
-    queryKey: ['energy-now'],
-    queryFn: api.getEnergyNow,
-    refetchInterval: 30_000,
-  });
-
-  const { data: rooms } = useQuery({
-    queryKey: ['rooms'],
-    queryFn: api.getRooms,
-    staleTime: 300_000,
-  });
-
-  if (isLoading) return <LoadingSkeleton />;
-
-  return (
-    <ScrollView style={styles.container} refreshControl={<RefreshControl />}>
-      <HomeHeader person={state.current_user} homeMode={state.home_mode} />
-      <WeatherBar weather={state.weather} />
-      <EnergyBanner energy={energyNow} />
-      <RoomsGrid rooms={rooms} onRoomPress={(id) => navigate('Room', { id })} />
-      <ActivityFeed events={state.recent_events} />
-      {state.active_alerts.length > 0 && (
-        <AlertBanner
-          count={state.active_alerts.length}
-          topAlert={state.active_alerts[0]}
-          onPress={() => navigate('Alerts')}
-        />
-      )}
-    </ScrollView>
-  );
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final summary = ref.watch(homeSummaryProvider);
+    return summary.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, _) => ErrorCard(message: error.toString()),
+      data: (value) => HomeSummaryView(summary: value),
+    );
+  }
 }
 ```
 
 ### 7.3 Home Status Cards
 
-```typescript
-// EnergyBanner — flat card, no gradient
-function EnergyBanner({ energy }: { energy: EnergyNow }) {
-  const isExporting = energy.grid_w < 0;
+```dart
+class EnergyStatusCard extends StatelessWidget {
+  const EnergyStatusCard({required this.energy, super.key});
+  final EnergySnapshot energy;
 
-  return (
-    <View style={styles.energyCard}>
-      <EnergyRow
-        icon="sun"
-        label="Solar"
-        value={`${(energy.solar_w / 1000).toFixed(1)} kW`}
-        color={colors.energy}
-      />
-      <EnergyRow
-        icon="battery"
-        label="Battery"
-        value={`${energy.battery_soc}%`}
-        color={energy.battery_soc > 30 ? colors.active : colors.warning}
-      />
-      <EnergyRow
-        icon="zap"
-        label="Grid"
-        value={isExporting
-          ? `${(-energy.grid_w / 1000).toFixed(1)} kW exporting`
-          : `${(energy.grid_w / 1000).toFixed(1)} kW importing`}
-        color={isExporting ? colors.active : colors.secondary}
-      />
-    </View>
+  @override
+  Widget build(BuildContext context) => StatusCard(
+    label: energy.gridWatts < 0 ? 'Exporting' : 'Importing',
+    value: '${energy.gridWatts.abs()} W',
+    semanticLabel: 'Grid ${energy.gridWatts < 0 ? 'export' : 'import'}',
   );
 }
 ```
@@ -561,127 +472,38 @@ States:
 
 ### 8.2 Voice Recording Implementation
 
-```typescript
-// src/screens/voice/VoiceScreen.tsx
+The mobile client does not stream microphone bytes through `/v1/ws` and does not contact ElevenLabs directly. It asks AI Home OS to create an authorized voice session, then joins the returned self-hosted LiveKit room. AI Home OS owns STT, reasoning, provider selection, consent checks, tool policy, and ElevenLabs credentials.
 
-export function VoiceScreen() {
-  const [state, setState] = useState<VoiceState>('idle');
-  const [transcript, setTranscript] = useState('');
-  const [conversation, setConversation] = useState<Turn[]>([]);
-  const ws = useRef<WebSocket | null>(null);
-  const recording = useRef<Audio.Recording | null>(null);
+```dart
+class VoiceSessionController extends AsyncNotifier<VoiceSessionState> {
+  @override
+  Future<VoiceSessionState> build() async => const VoiceSessionState.idle();
 
-  const startListening = async () => {
-    await Audio.requestPermissionsAsync();
-    await Audio.setAudioModeAsync({ allowsRecordingIOS: true });
-
-    setState('listening');
-
-    // Open WebSocket to voice endpoint
-    ws.current = new WebSocket(`${WS_VOICE_URL}?token=${getToken()}`);
-
-    ws.current.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-
-      if (msg.type === 'transcript') {
-        setTranscript(msg.text);
-      } else if (msg.type === 'response') {
-        setState('speaking');
-        setConversation(prev => [
-          ...prev,
-          { role: 'user', text: msg.input_text },
-          { role: 'jarvis', text: msg.response_text }
-        ]);
-        // Play audio response
-        playTTSAudio(msg.audio_url);
-      } else if (msg.type === 'done') {
-        setState('idle');
-      }
-    };
-
-    // Start recording + stream audio to WebSocket
-    const { recording: rec } = await Audio.Recording.createAsync(
-      RECORDING_OPTIONS_16K_MONO
-    );
-    recording.current = rec;
-
-    // Stream audio chunks as they come in
-    rec.setOnRecordingStatusUpdate(async (status) => {
-      if (status.isRecording && ws.current?.readyState === WebSocket.OPEN) {
-        const { sound, status: playStatus } = await rec.createNewLoadedSoundAsync();
-        // In production: use proper audio streaming via MediaStream or chunks
-      }
-    });
-  };
-
-  const stopListening = async () => {
-    if (recording.current) {
-      await recording.current.stopAndUnloadAsync();
-      const uri = recording.current.getURI();
-      // Upload audio for transcription
-      const formData = new FormData();
-      formData.append('audio', { uri, type: 'audio/wav', name: 'voice.wav' } as any);
-      const resp = await api.transcribeAndExecute(formData);
-      setConversation(prev => [
-        ...prev,
-        { role: 'user', text: resp.transcript },
-        { role: 'jarvis', text: resp.response_text }
-      ]);
-      setState('idle');
-    }
-  };
-
-  return (
-    <View style={styles.container}>
-      <JARVISAvatar state={state} />
-      <ConversationHistory turns={conversation} />
-      <MicButton
-        state={state}
-        onPressIn={startListening}
-        onPressOut={stopListening}
-      />
-      <TextCommandInput
-        onSubmit={(text) => submitTextCommand(text)}
-      />
-    </View>
-  );
+  Future<void> connect() async {
+    final grant = await ref.read(apiProvider).createVoiceSession();
+    final room = Room();
+    await room.connect(grant.liveKitUrl, grant.participantToken);
+    state = AsyncData(VoiceSessionState.connected(room));
+  }
 }
 ```
 
+The client displays the cloud-processing indicator before AI Home OS sends response text to ElevenLabs and keeps it visible until synthesis finishes. The user can end the session or disable the cloud voice at any time. Losing LiveKit connectivity never causes a switch to another cloud path; the interface offers typed input or a new explicitly created session.
+
 ### 8.3 JARVIS Avatar Component
 
-```typescript
-// Animated JARVIS indicator — uses opacity and scale only, no gradient
-function JARVISAvatar({ state }: { state: VoiceState }) {
-  const ringOpacity = useRef(new Animated.Value(1)).current;
-  const ringScale = useRef(new Animated.Value(1)).current;
+```dart
+class JarvisOrb extends StatelessWidget {
+  const JarvisOrb({required this.state, super.key});
+  final VoiceActivityState state;
 
-  useEffect(() => {
-    if (state === 'listening') {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(ringOpacity, { toValue: 0.3, duration: 600, useNativeDriver: true }),
-          Animated.timing(ringOpacity, { toValue: 1.0, duration: 600, useNativeDriver: true }),
-        ])
-      ).start();
-    } else {
-      ringOpacity.setValue(1);
-    }
-  }, [state]);
-
-  return (
-    <View style={styles.avatarContainer}>
-      {/* Outer ring — opacity animation only, solid colour */}
-      <Animated.View style={[styles.outerRing, {
-        borderColor: '#3498DB',
-        opacity: ringOpacity,
-        transform: [{ scale: ringScale }]
-      }]} />
-      {/* Inner circle — solid */}
-      <View style={[styles.innerCircle, { backgroundColor: '#3498DB' }]}>
-        <Text style={styles.avatarText}>AI</Text>
-      </View>
-    </View>
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: state.accessibleLabel,
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      decoration: BoxDecoration(shape: BoxShape.circle, color: state.color),
+    ),
   );
 }
 ```
@@ -799,77 +621,16 @@ function JARVISAvatar({ state }: { state: VoiceState }) {
 
 ### 10.2 Device Control Implementation
 
-```typescript
-// src/screens/devices/DeviceDetailScreen.tsx
-
-export function DeviceDetailScreen({ route }: Props) {
-  const { deviceId } = route.params;
-
-  const { data: device } = useQuery({
-    queryKey: ['device', deviceId],
-    queryFn: () => api.getDevice(deviceId),
-  });
-
-  // Live state from WebSocket
-  const liveState = useWebSocketStore(s => s.deviceStates[deviceId]);
-  const state = liveState ?? device?.state;
-
-  const mutation = useMutation({
-    mutationFn: (update: DeviceStateUpdate) => api.updateDeviceState(deviceId, update),
-    // Optimistic update — update UI immediately, revert on error
-    onMutate: async (update) => {
-      await queryClient.cancelQueries({ queryKey: ['device', deviceId] });
-      const previous = queryClient.getQueryData(['device', deviceId]);
-      queryClient.setQueryData(['device', deviceId], (old: any) => ({
-        ...old,
-        state: { ...old.state, ...update }
-      }));
-      return { previous };
-    },
-    onError: (_err, _vars, context) => {
-      queryClient.setQueryData(['device', deviceId], context?.previous);
-    },
-  });
-
-  const setBrightness = useDebouncedCallback(
-    (value: number) => mutation.mutate({ brightness: value }),
-    300
-  );
-
-  return (
-    <ScrollView style={styles.container}>
-      <DeviceStatusBadge state={state} />
-      <ToggleButton
-        on={state?.on}
-        onToggle={() => mutation.mutate({ state: state?.on ? 'off' : 'on' })}
-      />
-
-      {device?.capabilities.includes('brightness') && (
-        <Section title="Brightness" value={`${state?.brightness ?? 0}%`}>
-          <FlatSlider
-            value={state?.brightness ?? 0}
-            onValueChange={setBrightness}
-            minimumTrackTintColor={colors.active}
-            thumbTintColor={colors.active}
-          />
-        </Section>
-      )}
-
-      {device?.capabilities.includes('color_temp') && (
-        <Section title="Colour Temperature" value={`${state?.color_temp_k}K`}>
-          <FlatSlider
-            value={state?.color_temp_k ?? 3000}
-            minimumValue={2700}
-            maximumValue={6500}
-            onValueChange={(v) => mutation.mutate({ color_temp: v })}
-          />
-        </Section>
-      )}
-
-      <DeviceHistory deviceId={deviceId} />
-      <DeviceInfo device={device} />
-    </ScrollView>
-  );
+```dart
+Future<void> setDeviceState(DeviceCommand command, WidgetRef ref) async {
+  final previous = ref.read(deviceStateProvider(command.entityId));
+  ref.read(deviceStateProvider(command.entityId).notifier).applyOptimistic(command);
+  try {
+    await ref.read(deviceRepositoryProvider).execute(command);
+  } catch (_) {
+    ref.read(deviceStateProvider(command.entityId).notifier).replace(previous);
+    rethrow;
+  }
 }
 ```
 
@@ -1010,59 +771,15 @@ export function DeviceDetailScreen({ route }: Props) {
 
 ### 12.2 Power Flow Diagram Component
 
-```typescript
-// Real-time power flow visualization — flat, no gradients
-function PowerFlowDiagram({ energy }: { energy: EnergyNow }) {
-  const solarActive  = energy.solar_w > 100;
-  const exporting    = energy.grid_w < -100;
-  const importing    = energy.grid_w > 100;
-  const charging     = energy.battery_w > 50;
-  const discharging  = energy.battery_w < -50;
+```dart
+class PowerFlow extends StatelessWidget {
+  const PowerFlow({required this.snapshot, super.key});
+  final EnergySnapshot snapshot;
 
-  return (
-    <View style={styles.flowContainer}>
-      {/* Solar → Home arrow */}
-      <FlowNode
-        icon="sun"
-        label="Solar"
-        value={`${(energy.solar_w / 1000).toFixed(1)} kW`}
-        active={solarActive}
-        color={colors.energy}
-      />
-      <FlowArrow active={solarActive} direction="down" />
-
-      {/* Centre: Home consumption */}
-      <View style={styles.homeNode}>
-        <Text style={styles.homeLabel}>Home</Text>
-        <Text style={styles.homeValue}>
-          {(energy.home_load_w / 1000).toFixed(1)} kW
-        </Text>
-      </View>
-
-      {/* Battery flow */}
-      <FlowArrow active={charging || discharging}
-                 direction={charging ? 'into-battery' : 'out-of-battery'} />
-      <FlowNode
-        icon="battery"
-        label={`Battery ${energy.battery_soc}%`}
-        value={charging
-          ? `+${(energy.battery_w / 1000).toFixed(1)} kW`
-          : `−${(-energy.battery_w / 1000).toFixed(1)} kW`}
-        active={charging || discharging}
-        color={energy.battery_soc > 30 ? colors.active : colors.warning}
-      />
-
-      {/* Grid flow */}
-      <FlowArrow active={importing || exporting}
-                 direction={exporting ? 'to-grid' : 'from-grid'} />
-      <FlowNode
-        icon="zap"
-        label={exporting ? 'Exporting' : 'Importing'}
-        value={`${Math.abs(energy.grid_w / 1000).toFixed(1)} kW`}
-        active={importing || exporting}
-        color={exporting ? colors.active : colors.warning}
-      />
-    </View>
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+    painter: PowerFlowPainter(snapshot),
+    child: Semantics(label: snapshot.accessibleSummary),
   );
 }
 ```
@@ -1113,46 +830,20 @@ function PowerFlowDiagram({ energy }: { energy: EnergyNow }) {
 
 ### 13.2 Camera Feed Screen
 
-```typescript
-// Live camera feed via WebRTC (low latency)
-export function CameraFeedScreen({ route }: Props) {
-  const { cameraId } = route.params;
-  const { data: camera } = useQuery({ queryKey: ['camera', cameraId], queryFn: () => api.getCamera(cameraId) });
+```dart
+class CameraFeed extends ConsumerWidget {
+  const CameraFeed({required this.cameraId, super.key});
+  final String cameraId;
 
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  useEffect(() => {
-    // Request stream URL (authenticated, short-lived signed URL)
-    api.getCameraStreamUrl(cameraId).then(({ url }) => setStreamUrl(url));
-  }, [cameraId]);
-
-  return (
-    <View style={[styles.container, isFullscreen && styles.fullscreen]}>
-      <TouchableOpacity onPress={() => setIsFullscreen(!isFullscreen)}>
-        {streamUrl ? (
-          <RTSPPlayer
-            source={{ uri: streamUrl }}
-            style={isFullscreen ? styles.playerFullscreen : styles.player}
-            resizeMode="contain"
-          />
-        ) : (
-          <CameraPlaceholder />
-        )}
-      </TouchableOpacity>
-
-      {!isFullscreen && (
-        <>
-          <Text style={styles.cameraName}>{camera?.name}</Text>
-          <CameraEventList cameraId={cameraId} />
-          <View style={styles.controls}>
-            <IconButton icon="maximize" onPress={() => setIsFullscreen(true)} />
-            <IconButton icon="download" onPress={() => downloadSnapshot(cameraId)} />
-          </View>
-        </>
-      )}
-    </View>
-  );
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(cameraSessionProvider(cameraId));
+    return session.when(
+      data: (feed) => SecureWebRtcView(feed: feed),
+      loading: () => const CameraPlaceholder(),
+      error: (error, _) => CameraError(message: error.toString()),
+    );
+  }
 }
 ```
 
@@ -1280,223 +971,57 @@ export function CameraFeedScreen({ route }: Props) {
 
 ## 17. State Management
 
-### 17.1 Zustand Auth Store
+### 17.1 Riverpod Authentication Controller
 
-```typescript
-// src/store/authStore.ts
-import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import * as SecureStore from 'expo-secure-store';
+```dart
+@riverpod
+class AuthSessionController extends _$AuthSessionController {
+  @override
+  Future<AuthSession?> build() => ref.read(authRepositoryProvider).restore();
 
-interface AuthState {
-  accessToken: string | null;
-  refreshToken: string | null;
-  person: Person | null;
-  isAuthenticated: boolean;
-
-  login: (email: string, password: string) => Promise<LoginResult>;
-  loginWithBiometrics: () => Promise<{ success: boolean }>;
-  logout: () => Promise<void>;
-  refreshAccessToken: () => Promise<boolean>;
+  Future<void> signOut() async {
+    await ref.read(authRepositoryProvider).clearCredentials();
+    state = const AsyncData(null);
+  }
 }
-
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set, get) => ({
-      accessToken: null,
-      refreshToken: null,
-      person: null,
-      isAuthenticated: false,
-
-      login: async (email, password) => {
-        const resp = await apiClient.post('/v1/auth/login', { email, password });
-        if (resp.data.requires_mfa) {
-          return { requires_mfa: true, session_token: resp.data.session_token };
-        }
-        set({
-          accessToken: resp.data.access_token,
-          refreshToken: resp.data.refresh_token,
-          person: resp.data.person,
-          isAuthenticated: true,
-        });
-        // Store refresh token in SecureStore (keychain/keystore)
-        await SecureStore.setItemAsync('refresh_token', resp.data.refresh_token);
-        return { requires_mfa: false };
-      },
-
-      loginWithBiometrics: async () => {
-        const { LocalAuthentication } = await import('expo-local-authentication');
-        const result = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Authenticate to access your home',
-          cancelLabel: 'Cancel',
-        });
-        if (!result.success) return { success: false };
-
-        // Use stored refresh token to get new access token
-        const refreshToken = await SecureStore.getItemAsync('refresh_token');
-        if (!refreshToken) return { success: false };
-
-        const newToken = await get().refreshAccessToken();
-        return { success: newToken };
-      },
-
-      logout: async () => {
-        await apiClient.post('/v1/auth/logout');
-        await SecureStore.deleteItemAsync('refresh_token');
-        set({ accessToken: null, refreshToken: null, person: null, isAuthenticated: false });
-      },
-
-      refreshAccessToken: async () => {
-        try {
-          const refreshToken = await SecureStore.getItemAsync('refresh_token');
-          const resp = await apiClient.post('/v1/auth/refresh', { refresh_token: refreshToken });
-          set({ accessToken: resp.data.access_token });
-          return true;
-        } catch {
-          set({ isAuthenticated: false, accessToken: null });
-          return false;
-        }
-      },
-    }),
-    {
-      name: 'auth-storage',
-      storage: createJSONStorage(() => ({
-        // Sensitive fields excluded — only non-sensitive metadata persisted
-        getItem: (key) => SecureStore.getItemAsync(key),
-        setItem: (key, value) => SecureStore.setItemAsync(key, value),
-        removeItem: (key) => SecureStore.deleteItemAsync(key),
-      })),
-      partialize: (state) => ({
-        person: state.person,
-        isAuthenticated: state.isAuthenticated,
-        // accessToken and refreshToken handled separately via SecureStore
-      }),
-    }
-  )
-);
 ```
 
-### 17.2 WebSocket Store
+### 17.2 Live-State Stream Provider
 
-```typescript
-// src/store/wsStore.ts — Live state from WebSocket events
-
-interface WSStore {
-  deviceStates: Record<string, DeviceState>;
-  roomOccupancy: Record<string, RoomOccupancy>;
-  homeState: HomeState | null;
-  energyLive: EnergyNow | null;
-  connected: boolean;
-
-  handleEvent: (event: WSEvent) => void;
+```dart
+@riverpod
+class LiveHomeState extends _$LiveHomeState {
+  @override
+  Stream<HomeEvent> build() => ref.read(homeEventRepositoryProvider).events();
 }
-
-export const useWebSocketStore = create<WSStore>()((set) => ({
-  deviceStates: {},
-  roomOccupancy: {},
-  homeState: null,
-  energyLive: null,
-  connected: false,
-
-  handleEvent: (event) => {
-    switch (event.channel + '.' + event.type) {
-      case 'devices.state_changed':
-        set(state => ({
-          deviceStates: {
-            ...state.deviceStates,
-            [event.payload.device_id]: event.payload.state
-          }
-        }));
-        break;
-
-      case 'presence.person_moved':
-        set(state => ({
-          roomOccupancy: {
-            ...state.roomOccupancy,
-            [event.payload.from_room]: {
-              ...state.roomOccupancy[event.payload.from_room],
-              persons: state.roomOccupancy[event.payload.from_room]?.persons
-                ?.filter(p => p.person_id !== event.payload.person_id) ?? []
-            }
-          }
-        }));
-        break;
-
-      case 'energy.power_update':
-        set({ energyLive: event.payload });
-        break;
-    }
-  },
-}));
 ```
 
 ---
 
-## 18. Real-Time Data (WebSocket)
+## 18. Real-Time Control Data (WebSocket)
+
+This socket carries state and application events. LiveKit carries conversational audio as defined in Section 8 and Chapter 12, Section 4.5.
 
 ### 18.1 WebSocket Client with Auto-Reconnect
 
-```typescript
-// src/services/wsClient.ts
-
-class WSClient {
-  private ws: WebSocket | null = null;
-  private reconnectDelay = 1000;
-  private maxDelay = 30000;
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-
-  connect(token: string) {
-    const url = `${WS_URL}?token=${encodeURIComponent(token)}`;
-    this.ws = new WebSocket(url);
-
-    this.ws.onopen = () => {
-      console.log('[WS] Connected');
-      this.reconnectDelay = 1000;  // Reset backoff
-      useWebSocketStore.setState({ connected: true });
-
-      // Subscribe to all channels
-      this.ws!.send(JSON.stringify({
-        type: 'subscribe',
-        channels: ['devices', 'presence', 'alerts', 'energy', 'system']
-      }));
-
-      // Heartbeat
-      this.heartbeatTimer = setInterval(() => {
-        if (this.ws?.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ type: 'ping' }));
+```dart
+class HomeSocketClient {
+  Stream<HomeEvent> connect(Uri endpoint, String token) async* {
+    var delay = const Duration(seconds: 1);
+    while (true) {
+      try {
+        final channel = WebSocketChannel.connect(endpoint, protocols: [token]);
+        await for (final message in channel.stream) {
+          delay = const Duration(seconds: 1);
+          yield HomeEvent.fromJson(jsonDecode(message as String));
         }
-      }, 30000);
-    };
-
-    this.ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'pong') return;
-      useWebSocketStore.getState().handleEvent(msg);
-    };
-
-    this.ws.onclose = () => {
-      useWebSocketStore.setState({ connected: false });
-      if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-      // Exponential backoff reconnect
-      setTimeout(() => {
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
-        const token = useAuthStore.getState().accessToken;
-        if (token) this.connect(token);
-      }, this.reconnectDelay);
-    };
-
-    this.ws.onerror = (error) => {
-      console.error('[WS] Error:', error);
-    };
-  }
-
-  disconnect() {
-    this.ws?.close();
-    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+      } catch (_) {
+        await Future<void>.delayed(delay);
+        delay = Duration(seconds: (delay.inSeconds * 2).clamp(1, 30));
+      }
+    }
   }
 }
-
-export const wsClient = new WSClient();
 ```
 
 ---
@@ -1505,50 +1030,23 @@ export const wsClient = new WSClient();
 
 When the phone cannot reach the home server (no VPN, no internet), the app enters offline mode:
 
-```typescript
-// src/hooks/useConnectivity.ts
-
-export function useConnectivity() {
-  const [isOnline, setIsOnline] = useState(true);
-  const [isServerReachable, setIsServerReachable] = useState(true);
-
-  useEffect(() => {
-    // Network state from expo-network
-    const unsub = Network.addNetworkStateListener(state => {
-      setIsOnline(state.isConnected ?? false);
-    });
-
-    // Ping home server every 30s
-    const pingInterval = setInterval(async () => {
-      try {
-        await apiClient.get('/health', { timeout: 3000 });
-        setIsServerReachable(true);
-      } catch {
-        setIsServerReachable(false);
-      }
-    }, 30000);
-
-    return () => { unsub.remove(); clearInterval(pingInterval); };
-  }, []);
-
-  return { isOnline, isServerReachable };
+```dart
+class PendingCommand {
+  PendingCommand({required this.id, required this.command, required this.createdAt});
+  final String id;
+  final DeviceCommand command;
+  final DateTime createdAt;
 }
+
+// Only server-declared queueable and idempotent commands may be stored locally.
 ```
 
-```typescript
-// Offline banner shown when server unreachable
-function OfflineBanner() {
-  const { isServerReachable } = useConnectivity();
-  if (isServerReachable) return null;
-
-  return (
-    <View style={styles.offlineBanner}>
-      <Icon name="wifi-off" size={16} color={colors.warning} />
-      <Text style={styles.offlineText}>
-        Showing cached data — commands will queue until reconnected
-      </Text>
-    </View>
-  );
+```dart
+Future<void> replayPendingCommands() async {
+  for (final item in await pendingCommandStore.queue()) {
+    final result = await api.execute(item.command, idempotencyKey: item.id);
+    if (result.isFinal) await pendingCommandStore.remove(item.id);
+  }
 }
 ```
 
@@ -1556,13 +1054,13 @@ function OfflineBanner() {
 
 | Capability | Offline behaviour |
 |-----------|------------------|
-| View device states | Shows last cached state (WatermelonDB) |
-| Send commands | Queued in local DB; sent when reconnected |
+| View device states | Shows last cached state from Drift/SQLite |
+| Send commands | Apply the Chapter 12 action delivery policy; show the pending or rejected outcome and never queue sensitive actions |
 | View energy history | Available from local cache |
 | View automations | Available from local cache |
 | Receive notifications | Disabled (no server connection) |
 | Camera feeds | Unavailable |
-| Voice commands | Queued as text; processed on reconnect |
+| Voice commands | Unavailable; the user may type a new request after reconnecting, subject to the action delivery policy |
 
 ---
 
@@ -1581,40 +1079,13 @@ function OfflineBanner() {
 
 ### 20.2 Push Notification Handler
 
-```typescript
-// src/services/notifications.ts
-
-export async function setupNotifications() {
-  const { status } = await Notifications.requestPermissionsAsync();
-  if (status !== 'granted') return;
-
-  // Register device token with server
-  const token = await Notifications.getExpoPushTokenAsync({
-    projectId: EXPO_PROJECT_ID
-  });
-  await api.registerPushToken(token.data);
-
-  // Define notification categories (for action buttons)
-  await Notifications.setNotificationCategoryAsync('security.alert', [
-    { identifier: 'view', buttonTitle: 'View', options: { opensAppToForeground: true } },
-    { identifier: 'acknowledge', buttonTitle: 'Acknowledge', options: { opensAppToForeground: false } },
-  ]);
-
-  // Handle notification taps
-  Notifications.addNotificationResponseReceivedListener(async (response) => {
-    const { notification, actionIdentifier } = response;
-    const data = notification.request.content.data;
-
-    if (actionIdentifier === 'acknowledge' && data.alert_id) {
-      await api.acknowledgeAlert(data.alert_id);
-      return;
-    }
-
-    // Navigate to relevant screen
-    if (data.screen) {
-      navigationRef.current?.navigate(data.screen, data.params);
-    }
-  });
+```dart
+Future<void> configurePushNotifications() async {
+  final permission = await FirebaseMessaging.instance.requestPermission();
+  if (permission.authorizationStatus == AuthorizationStatus.authorized) {
+    final token = await FirebaseMessaging.instance.getToken();
+    if (token != null) await api.registerPushToken(token);
+  }
 }
 ```
 
@@ -1622,85 +1093,28 @@ export async function setupNotifications() {
 
 ## 21. Biometric Authentication
 
-```typescript
-// src/services/biometrics.ts
-
-export async function isBiometricAvailable(): Promise<boolean> {
-  const compatible = await LocalAuthentication.hasHardwareAsync();
-  const enrolled = await LocalAuthentication.isEnrolledAsync();
-  return compatible && enrolled;
+```dart
+Future<bool> confirmSensitiveAction(String reason) async {
+  final localAuth = LocalAuthentication();
+  return localAuth.authenticate(
+    localizedReason: reason,
+    options: const AuthenticationOptions(biometricOnly: true),
+  );
 }
-
-export async function authenticateWithBiometrics(
-  promptMessage: string = 'Authenticate to continue'
-): Promise<boolean> {
-  const result = await LocalAuthentication.authenticateAsync({
-    promptMessage,
-    disableDeviceFallback: false,    // Allow PIN fallback
-    cancelLabel: 'Use Password',
-  });
-  return result.success;
-}
-
-// Require biometric for sensitive actions in the app
-export function withBiometricGuard(action: () => Promise<void>, prompt: string) {
-  return async () => {
-    if (await isBiometricAvailable()) {
-      const ok = await authenticateWithBiometrics(prompt);
-      if (!ok) return;
-    }
-    await action();
-  };
-}
-
-// Usage:
-const disarmAlarm = withBiometricGuard(
-  () => api.alarmDisarm(),
-  'Authenticate to disarm the alarm'
-);
 ```
 
 ---
 
 ## 22. Home Screen Widgets
 
-### 22.1 iOS Widget (WidgetKit via Expo)
+### 22.1 iOS and Android Home-Screen Widgets
 
-```typescript
-// Small widget (2×2): Home status + solar
-function SmallWidget() {
-  return (
-    <View style={widgetStyles.container}>
-      <Text style={widgetStyles.title}>Home</Text>
-      <View style={widgetStyles.row}>
-        <Dot color={homeState.persons_home > 0 ? '#2ECC71' : '#505060'} />
-        <Text style={widgetStyles.label}>
-          {homeState.persons_home} home
-        </Text>
-      </View>
-      <View style={widgetStyles.row}>
-        <Icon name="sun" size={12} color="#F1C40F" />
-        <Text style={widgetStyles.label}>
-          {(solarW / 1000).toFixed(1)} kW
-        </Text>
-      </View>
-      <View style={widgetStyles.row}>
-        <Icon name="battery" size={12} color="#2ECC71" />
-        <Text style={widgetStyles.label}>{batterySoc}%</Text>
-      </View>
-    </View>
-  );
-}
+```dart
+// Home-screen widgets use a small platform channel boundary.
+const widgetChannel = MethodChannel('ai.home.os/widgets');
 
-// Medium widget (4×2): Rooms occupancy + energy
-function MediumWidget() {
-  return (
-    <View style={widgetStyles.mediumContainer}>
-      <HomeStatusRow homeMode={homeMode} personsHome={personsHome} />
-      <EnergyRow solar={solarW} battery={batterySoc} grid={gridW} />
-      <RoomRow rooms={occupiedRooms.slice(0, 3)} />
-    </View>
-  );
+Future<void> refreshHomeWidget(HomeSummary summary) async {
+  await widgetChannel.invokeMethod<void>('refresh', summary.toJson());
 }
 ```
 
@@ -1710,23 +1124,21 @@ function MediumWidget() {
 
 | Feature | Implementation |
 |---------|--------------|
-| **Dynamic type** | All text scales with system font size |
-| **VoiceOver / TalkBack** | `accessibilityLabel` on all interactive elements |
+| **Dynamic type** | Flutter text scaling follows the platform accessibility settings |
+| **VoiceOver / TalkBack** | Flutter `Semantics` labels and values on interactive elements |
 | **Colour contrast** | All text/background pairs meet WCAG AA (4.5:1) |
 | **Touch targets** | Minimum 44×44 pt (Apple HIG) |
-| **Semantic elements** | `accessibilityRole` set on buttons, headers, toggles |
+| **Semantic elements** | `Semantics` roles, labels, values, and actions for controls |
 | **No colour-only information** | Icons + text alongside colour indicators |
-| **Motion reduction** | `reduceMotion` check before running animations |
+| **Motion reduction** | Check platform accessible-navigation settings before animation |
 
-```typescript
-// Accessible toggle component
-<Switch
-  value={device.state.on}
-  onValueChange={onToggle}
-  accessibilityLabel={`${device.name}, currently ${device.state.on ? 'on' : 'off'}`}
-  accessibilityHint="Double tap to toggle"
-  accessibilityRole="switch"
-/>
+```dart
+Semantics(
+  button: true,
+  label: 'Living room lights',
+  value: light.isOn ? 'On, ${light.brightness} percent' : 'Off',
+  child: DeviceTile(device: light),
+)
 ```
 
 ---
@@ -1735,147 +1147,69 @@ function MediumWidget() {
 
 | Metric | Target | Measurement |
 |--------|--------|------------|
-| **App launch (cold)** | < 2.0 s | Expo startup time |
-| **Home Dashboard render** | < 200 ms | React Native Profiler |
+| **App launch (cold)** | < 2.0 s | Flutter DevTools profile build |
+| **Home Dashboard render** | < 200 ms | Flutter frame and rebuild profiling |
 | **Device state update (WS)** | < 100 ms | WebSocket → UI re-render |
 | **Command submission → response** | < 3.0 s | API latency P95 |
 | **Camera feed start** | < 3.0 s | WebRTC negotiation |
-| **JS bundle size** | < 2 MB | Metro bundler output |
+| **Release download size** | Baseline and budget established during the first mobile prototype | Release artifact analysis |
 | **Memory usage (idle)** | < 80 MB | Xcode Instruments |
 | **Battery impact (background)** | < 1%/hr | iOS Battery usage report |
 
 ### 24.1 Performance Strategies
 
-```typescript
-// Memoize expensive list renders
-const RoomsGrid = React.memo(({ rooms, onRoomPress }) => (
-  <FlatList
-    data={rooms}
-    keyExtractor={r => r.room_id}
-    renderItem={({ item }) => <RoomCard room={item} onPress={() => onRoomPress(item.room_id)} />}
-    numColumns={2}
-    // Virtualization — only render visible rooms
-    initialNumToRender={6}
-    maxToRenderPerBatch={4}
-    windowSize={5}
-    removeClippedSubviews={true}
-  />
-));
+```dart
+class RoomsGrid extends StatelessWidget {
+  const RoomsGrid({required this.rooms, super.key});
+  final List<RoomSummary> rooms;
 
-// Use React Query's staleTime to prevent redundant fetches
-const { data } = useQuery({
-  queryKey: ['rooms'],
-  queryFn: api.getRooms,
-  staleTime: 5 * 60 * 1000,    // Consider fresh for 5 minutes
-  gcTime: 30 * 60 * 1000,      // Keep in cache for 30 minutes
-});
-
-// Virtualized activity feed (potentially hundreds of events)
-const ActivityFeed = () => (
-  <FlashList
-    data={events}
-    estimatedItemSize={70}
-    renderItem={({ item }) => <ActivityItem event={item} />}
-    keyExtractor={e => e.event_id}
-  />
-);
+  @override
+  Widget build(BuildContext context) => GridView.builder(
+    itemCount: rooms.length,
+    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2),
+    itemBuilder: (_, index) => RepaintBoundary(child: RoomCard(room: rooms[index])),
+  );
+}
 ```
 
 ---
 
 ## 25. Local Database Schema
 
-WatermelonDB (SQLite-backed) for offline state caching:
+Drift with SQLite provides typed offline state caching and explicit migrations:
 
-```typescript
-// src/db/schema.ts
-import { appSchema, tableSchema } from '@nozbe/watermelondb';
-
-export const schema = appSchema({
-  version: 1,
-  tables: [
-    tableSchema({
-      name: 'devices',
-      columns: [
-        { name: 'server_id', type: 'string', isIndexed: true },
-        { name: 'name', type: 'string' },
-        { name: 'room_id', type: 'string', isIndexed: true },
-        { name: 'device_type', type: 'string' },
-        { name: 'state_json', type: 'string' },   // JSON blob
-        { name: 'capabilities_json', type: 'string' },
-        { name: 'is_available', type: 'boolean' },
-        { name: 'updated_at', type: 'number' },
-      ],
-    }),
-    tableSchema({
-      name: 'rooms',
-      columns: [
-        { name: 'server_id', type: 'string', isIndexed: true },
-        { name: 'name', type: 'string' },
-        { name: 'floor', type: 'string' },
-        { name: 'occupancy_json', type: 'string' },
-        { name: 'sensor_json', type: 'string' },
-        { name: 'updated_at', type: 'number' },
-      ],
-    }),
-    tableSchema({
-      name: 'notifications',
-      columns: [
-        { name: 'server_id', type: 'string', isIndexed: true },
-        { name: 'category', type: 'string' },
-        { name: 'title', type: 'string' },
-        { name: 'body', type: 'string' },
-        { name: 'data_json', type: 'string' },
-        { name: 'is_read', type: 'boolean' },
-        { name: 'created_at', type: 'number' },
-      ],
-    }),
-    tableSchema({
-      name: 'queued_commands',
-      columns: [
-        { name: 'text', type: 'string' },
-        { name: 'params_json', type: 'string' },
-        { name: 'created_at', type: 'number' },
-        { name: 'status', type: 'string' },   // pending, sent, failed
-      ],
-    }),
-    tableSchema({
-      name: 'energy_readings',
-      columns: [
-        { name: 'solar_w', type: 'number' },
-        { name: 'battery_soc', type: 'number' },
-        { name: 'grid_w', type: 'number' },
-        { name: 'home_load_w', type: 'number' },
-        { name: 'timestamp', type: 'number', isIndexed: true },
-      ],
-    }),
-  ],
-});
+```dart
+class CachedDevice extends Table {
+  TextColumn get entityId => text()();
+  TextColumn get stateJson => text()();
+  DateTimeColumn get observedAt => dateTime()();
+  @override
+  Set<Column<Object>> get primaryKey => {entityId};
+}
 ```
 
 ---
 
 ## 26. Design Decisions & Trade-offs
 
-### 26.1 React Native vs. Flutter vs. Native
+### 26.1 Flutter vs. Separate Native Applications
 
 | Framework | Code reuse | Performance | Ecosystem | Team fit |
 |-----------|-----------|-------------|----------|---------|
-| **React Native (choice)** | 95% shared | Very Good | Large (npm) | TypeScript-first team |
-| Flutter | 95% shared | Excellent | Growing (Dart) | Requires Dart expertise |
+| **Flutter (choice)** | High across mobile, web panels, and desktop | Excellent | Mature Dart packages plus platform channels | One shared interface architecture |
 | Native (Swift + Kotlin) | 0% | Best | Platform native | 2× development cost |
 
-**Decision:** React Native with Expo — fastest cross-platform development, Expo SDK handles hardware access (biometrics, audio, camera), large community.
+**Decision:** Flutter is the shared client framework. Mobile builds target Android and iOS, while the wall-panel build targets the web and runs in Chromium kiosk mode. Platform channels and narrowly scoped native extensions handle capabilities that do not have an acceptable cross-platform package. The backend APIs remain independent of Flutter.
 
-### 26.2 Zustand + React Query vs. Redux + RTK Query
+### 26.2 Riverpod and Repository Boundaries
 
 | Approach | Boilerplate | Learning curve | Server state | UI state |
 |----------|-------------|---------------|-------------|---------|
-| **Zustand + React Query** | Minimal | Low | Excellent | Good |
-| Redux + RTK Query | High | Medium | Good | Excellent |
-| Jotai + SWR | Low | Low | Good | Good |
+| **Riverpod + repositories (choice)** | Low | Medium | Explicit cache and stream policy | Excellent |
+| Bloc + repositories | Medium | Medium | Explicit | Excellent |
+| Provider only | Low | Low | Requires custom conventions | Good |
 
-**Decision:** Zustand for UI state (auth, settings) — zero boilerplate, tiny bundle. React Query for server state — caching, refetching, mutation with optimistic updates out of the box.
+**Decision:** Riverpod owns presentation and asynchronous state. Repository interfaces own HTTP, WebSocket, LiveKit, persistence, retry, and cache behaviour. Widgets never call transports or databases directly.
 
 ### 26.3 Flat Design (No Gradients)
 
@@ -1894,8 +1228,11 @@ Per project requirements, all UI colours are solid. This enforces:
 | Push notification delivery failure (DND, battery saver) | High | Medium | Critical alerts use APNs critical notifications (bypass DND) |
 | WireGuard VPN battery drain on mobile | Medium | Medium | VPN connects only when home server unreachable without it |
 | WebSocket reconnect loop on flaky network | Medium | Medium | Exponential backoff + jitter; max 30s delay |
-| Local DB corruption (WatermelonDB) | Low | Medium | DB migration versioning; fallback to server fetch on DB error |
-| Biometric bypass on jailbroken device | Low | High | SecureStore uses secure enclave; cannot be bypassed without physical access |
+| LiveKit room token exposed or used for another room | Low | High | Keep token in memory; short expiry and least-privilege room grants; never log; revoke on session end |
+| Voice session drops on mobile network transition | Medium | Medium | LiveKit reconnection handling; explicit session state; no duplicate command execution; typed fallback |
+| Cloud voice enabled without clear user awareness | Low | High | Server-side consent check and mobile provider indicator before and during ElevenLabs processing |
+| Local DB corruption (Drift/SQLite) | Low | Medium | Versioned migrations; rebuild non-authoritative caches from the server |
+| Token or biometric control compromised on a rooted or jailbroken device | Medium | High | Treat the device as untrusted; use platform hardware-backed storage where available, short-lived access tokens, refresh-token rotation and revocation, device registration, supported platform attestation signals, and fresh server-verified step-up authentication for sensitive actions; restrict or block sensitive capabilities when integrity requirements fail |
 
 ---
 
@@ -1916,21 +1253,21 @@ Per project requirements, all UI colours are solid. This enforces:
 
 ## 29. References
 
-1. **React Native** — https://reactnative.dev/
-2. **Expo SDK 52** — https://docs.expo.dev/
-3. **React Navigation 7** — https://reactnavigation.org/
-4. **Zustand** — https://github.com/pmndrs/zustand
-5. **React Query (TanStack)** — https://tanstack.com/query/latest
-6. **WatermelonDB** — https://github.com/Nozbe/WatermelonDB
-7. **Expo LocalAuthentication** — https://docs.expo.dev/sdk/local-authentication/
-8. **Expo Notifications** — https://docs.expo.dev/sdk/notifications/
-9. **Expo SecureStore** — https://docs.expo.dev/sdk/securestore/
-10. **Victory Native** — https://commerce.nearform.com/open-source/victory-native/
-11. **FlashList** — https://shopify.github.io/flash-list/
-12. **Lucide React Native** — https://lucide.dev/
-13. **WCAG 2.1 — Accessibility Guidelines** — https://www.w3.org/TR/WCAG21/
-14. **Apple Human Interface Guidelines** — https://developer.apple.com/design/
-15. **Material Design 3** — https://m3.material.io/ (Android reference)
+1. **Flutter documentation** — https://docs.flutter.dev/
+2. **Flutter supported platforms** — https://docs.flutter.dev/reference/supported-platforms
+3. **Flutter accessibility** — https://docs.flutter.dev/ui/accessibility-and-internationalization/accessibility
+4. **Riverpod** — https://riverpod.dev/
+5. **go_router** — https://pub.dev/packages/go_router
+6. **Dio** — https://pub.dev/packages/dio
+7. **Drift** — https://drift.simonbinder.eu/
+8. **local_auth** — https://pub.dev/packages/local_auth
+9. **flutter_secure_storage** — https://pub.dev/packages/flutter_secure_storage
+10. **Firebase Messaging for Flutter** — https://firebase.google.com/docs/cloud-messaging/flutter/client
+11. **WCAG 2.2 — Accessibility Guidelines** — https://www.w3.org/TR/WCAG22/
+12. **Apple Human Interface Guidelines** — https://developer.apple.com/design/
+13. **Material Design 3** — https://m3.material.io/
+14. **LiveKit Flutter SDK** — https://docs.livekit.io/home/client/connect/
+15. **LiveKit Agents** — https://docs.livekit.io/agents/
 
 ---
 
@@ -1940,5 +1277,5 @@ Per project requirements, all UI colours are solid. This enforces:
 ---
 
 > **Document maintained by:** AI Home OS Architecture Team  
-> **Last updated:** 2026-07-17  
-> **Chapter status:** Draft v1.0 — Open for community review
+> **Last updated:** 2026-09-16
+> **Chapter status:** Draft v1.1 — Flutter architecture selected; implementation pending

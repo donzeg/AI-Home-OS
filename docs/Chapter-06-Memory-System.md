@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -395,7 +397,9 @@ Procedural memory stores **how to do things** — learned and explicit routines,
 | **Learned routine** | "At 07:15 on weekdays, start coffee machine, increase bedroom blinds 50%, set thermostat to 21°C" | Detected from repeated behavior |
 | **Explicit automation** | "When front door opens after 22:00, turn on hallway light at 30%" | User-defined |
 | **LLM-generated plan** | "When Sadiq is working from home, reduce Zoom notification interruptions" | AI Planning Agent |
-| **Emergency procedure** | "On smoke alarm trigger: unlock all doors, turn on all lights at 100%, call emergency services" | System defined |
+| **Emergency safety reference** | "On validated smoke alarm: invoke the approved local evacuation plan through the independent safety controller" | Approved site safety configuration |
+
+Procedural memory does not define or execute emergency unlock and notification behavior. It stores only a reference to the approved site safety plan. The independent local safety controller owns that plan, validates alarm inputs, operates only designated evacuation doors and routes, and applies locally approved notification procedures as specified in Chapter 11, Section 5.4.1. The LLM, Memory System, API, plugins, and general Automation Engine cannot create, alter, or directly invoke `evacuation.unlock`.
 
 ### 7.2 Routine Schema
 

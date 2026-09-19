@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -37,13 +39,13 @@
 
 The audio system is how AI Home OS speaks and listens. It is the primary human-computer interface for the platform — more natural, more ambient, and more capable than any screen-based interface. Unlike commercial voice assistants (Alexa, Google Assistant, Siri), the AI Home OS audio system is:
 
-- **Always local** — voice never leaves the home network for processing
+- **Local by default** — voice processing remains in the home unless cloud speech processing is separately enabled with explicit consent
 - **Conversation-capable** — multi-turn dialogue, not single command-response
 - **Context-aware** — the AI knows who is speaking, where they are, what they were doing
 - **Ambient** — the system listens softly everywhere and speaks appropriately to the room
-- **Private** — audio is processed locally, never stored as raw audio, never transmitted
+- **Private** — raw audio is not persistently stored; any optional cloud transmission is visible, scoped, and disabled by default
 
-The audio pipeline transforms raw microphone signals into structured intent, and LLM responses into natural speech — entirely within the home.
+The default audio pipeline transforms raw microphone signals into structured intent, and LLM responses into natural speech, entirely within the home.
 
 ### Audio System Capabilities Summary
 
@@ -54,7 +56,8 @@ The audio pipeline transforms raw microphone signals into structured intent, and
 | Wake word detection | openWakeWord (local, low-latency) |
 | Speech-to-text | Whisper (faster-whisper, local GPU) |
 | Voice identification | SpeechBrain speaker embeddings |
-| Text-to-speech | Piper TTS (local, GPU-accelerated) |
+| Text-to-speech | Provider router: Piper default, XTTS optional local, ElevenLabs optional cloud |
+| Conversational media | Self-hosted LiveKit for mobile, browser, and capable wall-panel sessions |
 | Multi-room speaker | Snapcast + Squeezelite / Home Assistant Music Assistant |
 | Noise suppression | RNNoise / Silero VAD |
 | Conversation continuity | AI Home OS dialogue manager |
@@ -71,9 +74,11 @@ In the eventual state of AI Home OS, most human-AI interaction happens through v
 - **Natural**: TTS must not sound robotic; speech must match the emotional tone of the message
 - **Contextual**: "Turn it up" is valid without specifying what device, because the AI knows what is playing
 
-### 2.2 No Audio Leaves the Home
+### 2.2 Local by Default, Explicit Cloud Opt-In
 
-The full pipeline — wake word detection, VAD, STT, NLU, TTS — runs locally. The only exception is when the user explicitly invokes a cloud LLM for complex reasoning, in which case only the **text transcription** leaves the home (never raw audio).
+The full default pipeline — wake word detection, VAD, STT, NLU, and TTS — runs locally. Cloud STT, cloud LLM processing, and cloud TTS are separate optional features, each disabled by default and governed by separate consent. Cloud STT transmits an intentionally captured audio segment; cloud LLM processing transmits approved text and context; cloud TTS transmits response text. Enabling one feature does not enable another.
+
+Local processing failure never causes automatic cloud transmission. If the applicable consent and policy checks do not pass, the system reports that local processing is unavailable and keeps the audio local.
 
 ### 2.3 The AI Listens Softly
 
@@ -142,6 +147,54 @@ flowchart TD
 
     NLU -->|"Intent events"| MQTT["MQTT Broker\n→ AI Agents"]
 ```
+
+The diagram above is the mandatory local room path. It remains available without LiveKit Cloud, ElevenLabs, or internet access.
+
+### 3.1 Conversational Media and Speech Provider Placement
+
+AI Home OS uses two separate audio paths:
+
+1. **Local room path:** microphone satellites send post-activation speech to the local audio services. Piper and Snapcast return speech to room speakers. Emergency announcements and basic room interaction use this path.
+2. **Interactive session path:** the mobile app, browser, and capable wall panels join a self-hosted LiveKit room for full-duplex WebRTC audio, turn detection, interruption handling, and session lifecycle. A local AI Home OS participant bridges that media to the existing STT, reasoning, policy, and TTS services.
+
+```mermaid
+flowchart LR
+    subgraph LOCAL["Home network"]
+        SAT["Room microphone satellite"]
+        PANEL["Wall panel"]
+        LK["Self-hosted LiveKit server"]
+        AGENT["AI Home OS media participant"]
+        STT["Local faster-whisper"]
+        CORE["Conversation and reasoning services"]
+        POLICY["Policy services and Sensitive Action Gateway"]
+        ROUTER["Speech provider router"]
+        PIPER["Piper"]
+        XTTS["XTTS"]
+        SNAP["Snapcast / local playback"]
+    end
+
+    MOBILE["Mobile or browser"] <--> LK
+    PANEL <--> LK
+    LK <--> AGENT
+    SAT --> STT
+    AGENT --> STT
+    STT --> CORE
+    CORE --> POLICY
+    CORE --> ROUTER
+    ROUTER --> PIPER
+    ROUTER --> XTTS
+    PIPER --> SNAP
+    XTTS --> SNAP
+    PIPER --> AGENT
+    XTTS --> AGENT
+    ROUTER -. "explicit cloud-TTS consent" .-> ELEVEN["ElevenLabs TTS"]
+    ELEVEN -. "streamed audio" .-> AGENT
+    ELEVEN -. "room response" .-> SNAP
+```
+
+LiveKit is a media plane, not the source of identity, authorization, conversation memory, or device policy. Its rooms and agents cannot call Home Assistant or execute sensitive actions directly. Media received through LiveKit enters the same identity, reasoning, tool, audit, and Chapter 11 Sensitive Action Gateway controls as every other interface.
+
+The first deployment uses a self-hosted LiveKit server and self-hosted agent process. LiveKit Cloud is a separate future hosting option and requires its own data-flow, retention, region, consent, and threat review. Selecting self-hosted LiveKit does not make a configured cloud STT, LLM, or TTS provider local.
 
 ---
 
@@ -758,12 +811,13 @@ The AI proactively improves speaker models over time by re-training on confirmed
 
 ### 9.4 Voice ID in Security Context
 
-Voice identification contributes to security decisions:
-- **Low confidence (< 0.25)**: Unknown speaker — treat as visitor/guest
-- **Medium confidence (0.25–0.45)**: Probable [name] — allow standard commands, not sensitive
-- **High confidence (> 0.45)**: Confirmed [name] — allow sensitive commands (unlock doors, access financial info)
+Voice identification produces **recognition evidence**, not an authentication credential. Its confidence score can help personalize a response or contribute to the identity-fusion process described in Chapter 5, but it never grants permission to execute an action.
 
-Voice ID **alone** is never used for security-critical actions. It must be combined with other identity signals (Chapter 5).
+- **Low confidence (< 0.25):** Report the speaker as unknown. Use the guest-safe experience and expose no private information.
+- **Medium confidence (0.25–0.45):** Report a possible identity with the confidence and observation timestamp. Do not expose person-specific private information based on this result.
+- **High confidence (> 0.45):** Report a likely identity with the confidence and observation timestamp. Personalization may proceed only within the permissions already available to an unauthenticated session.
+
+Combining voice ID with face, presence, or other passive recognition signals may improve recognition confidence, but it does not turn recognition into authentication. Sensitive actions—including door unlock, alarm disarm, credential or security-setting changes, and access to private recordings or financial information—must be submitted to the **Sensitive Action Gateway** defined in Chapter 11, Section 5.4. The gateway independently checks the action-specific role, trusted initiation channel, fresh deliberate credential, confirmation, context, and execution rules. If any required evidence is absent, stale, conflicting, or unavailable, the request fails closed and is not queued.
 
 ---
 
@@ -868,18 +922,21 @@ def determine_tts_params(message_type: str) -> TTSParams:
     return profiles.get(message_type, profiles["normal"])
 ```
 
-### 10.5 Cloud TTS Fallback
+### 10.5 Speech Provider Router and Optional ElevenLabs TTS
 
-For languages or voices not supported by Piper, AI Home OS falls back to cloud TTS:
+The conversation service calls an internal provider-neutral streaming interface rather than a vendor SDK directly. Selection is policy-driven per utterance:
 
-| Service | Languages | Quality | Cost |
-|---------|----------|---------|------|
-| **ElevenLabs** | 30+ | ★★★★★ (human-like) | $5/month (starter) |
-| **Azure Neural TTS** | 100+ languages, 400+ voices | ★★★★★ | $4/1M chars |
-| **Google Cloud TTS** | 40 languages, 220+ voices | ★★★★ | $4/1M chars |
-| **Amazon Polly** | 30 languages | ★★★★ | $4/1M chars |
+| Priority | Provider | Intended use | Network and consent |
+|----------|----------|--------------|---------------------|
+| 1 | **Piper** | Default household responses, alerts, offline operation | Local; no cloud consent required |
+| 2 | **XTTS** | User-selected higher-quality or cloned local voice | Local; requires voice-cloning consent where applicable |
+| 3 | **ElevenLabs streaming TTS** | User-selected premium expressive voice or language profile | Cloud; separate cloud-TTS consent and egress approval required |
 
-> Cloud TTS sends only the **text string** (not audio) to the cloud. This is acceptable from a privacy standpoint — only the text of AI responses leaves the home, not any recorded speech.
+ElevenLabs receives only the redacted response text and synthesis controls required for the selected voice. Its API key remains server-side in the secrets service. Mobile apps, browsers, panels, and satellites never receive the provider credential. Generated audio streams back through the media participant or local playback service and is not used as an authorization signal.
+
+Provider choice is fixed before an utterance begins. ElevenLabs failure does not authorize another cloud provider. For ordinary conversation, the system may ask the user whether to repeat the response with local Piper; it does not silently resend the text. Alerts and safety messages always use a prevalidated local voice path and never depend on ElevenLabs or LiveKit.
+
+The provider registry stores supported languages, configured voices, permitted data categories, consent requirement, maximum text length, timeout, rate limit, and spending ceiling. Pricing, model names, language coverage, and latency are operational configuration rather than fixed architectural claims because providers can change them. Candidate voices must pass the evaluation requirements in Section 15.8 before they become selectable.
 
 ---
 
@@ -1170,7 +1227,23 @@ Snapcast → Living room + kitchen speakers (synchronized)
 | Voice embeddings | Stored encrypted in PostgreSQL (user can delete/re-enroll) |
 | TTS audio | Ephemeral — generated on demand, not stored |
 
-### 15.2 Hardware Mute Switch
+### 15.2 Data Egress Policy
+
+| Feature | Data sent outside the home | Default | Consent scope |
+|---------|----------------------------|---------|---------------|
+| Local STT | None | Enabled | Not applicable |
+| Cloud STT | Post-activation command audio segment | Disabled | Provider, users, rooms, purpose, expiry |
+| Cloud LLM | Redacted transcription and explicitly approved context | Disabled | Provider, data categories, users, purpose, expiry |
+| ElevenLabs or another cloud TTS | Redacted AI response text and approved synthesis controls | Disabled | Provider, voice, users, rooms, data categories, purpose, expiry |
+| Self-hosted LiveKit | Post-activation session audio and session metadata remain on home-managed infrastructure | Disabled until deployed | Authorized client, user, room, and session purpose |
+| LiveKit Cloud | Session audio and required session metadata leave the home | Disabled | Hosting region, users, rooms, purpose, retention, expiry |
+| Diagnostic upload | User-selected recording | Disabled | One-time approval for the selected recording |
+
+Raw speech is biometric and may contain personal information even when container metadata is removed. Metadata removal is data minimization; it is not anonymization.
+
+Cloud consent is denied when the speaker is unknown, guest mode is active, a child lacks guardian-approved consent, the room prohibits cloud audio, or multiple detected speakers have incompatible consent. Uncertainty always resolves to local-only processing.
+
+### 15.3 Hardware Mute Switch
 
 Each microphone satellite includes a **hardware mute** — a physical switch that disconnects power to the microphone array at the hardware level, not software:
 
@@ -1179,7 +1252,7 @@ Each microphone satellite includes a **hardware mute** — a physical switch tha
 - Wall panel shows mute status for all satellites
 - "JARVIS, mute all microphones" triggers hardware GPIO on all satellites via MQTT
 
-### 15.3 Audio Privacy Indicator
+### 15.4 Audio Privacy Indicator
 
 Every satellite has a **multicolor LED ring** (WS2812B NeoPixel):
 
@@ -1191,9 +1264,12 @@ Every satellite has a **multicolor LED ring** (WS2812B NeoPixel):
 | White dim | Playing TTS response |
 | Red solid | Hardware muted |
 | Yellow | Processing (STT/LLM in progress) |
+| Purple pulse | Cloud processing approved; shown before and during transmission |
 | Red blink | Error / satellite offline |
 
-### 15.4 Conversation Log Access Control
+The wall panel and mobile application also identify the selected provider and data type before transmission. Indicator failure blocks cloud audio transmission.
+
+### 15.5 Conversation Log Access Control
 
 All conversation transcriptions are stored encrypted. Access control:
 - **Primary occupant**: Full read/delete access to all logs
@@ -1201,6 +1277,37 @@ All conversation transcriptions are stored encrypted. Access control:
 - **Guests**: No log storage (explicitly disabled for guest sessions)
 - **Remote access**: Requires VPN + re-authentication for log access
 - **Law enforcement**: Requires warrant; all data encrypted at rest
+
+### 15.6 Cloud Audio Minimization and Provider Requirements
+
+When cloud STT is authorized, the adapter sends only speech captured after activation, removes silence, excludes the wake-word pre-roll where possible, and enforces configured duration and size limits. Ambient audio before activation and unrelated conversation context are not included.
+
+Approved cloud providers must support encrypted transport and documented processing regions. Provider-side retention and training use must be disabled where supported. The system records the provider, purpose, data category, consent reference, timestamp, and outcome without storing the audio content in the audit log. Temporary local audio is discarded immediately after the request completes.
+
+Self-hosted LiveKit is configured without room recording or egress by default. Room names and participant metadata use opaque identifiers rather than person or room names. Access tokens are short-lived, audience-bound, room-scoped, and issued only after the AI Home OS API authenticates and authorizes the participant. LiveKit logs and metrics exclude audio, transcripts, access tokens, and response text. Enabling recording, LiveKit Cloud, SIP, or any external egress is a separate feature requiring a documented retention and consent decision.
+
+### 15.7 Consent and Revocation
+
+Consent records identify who enabled the feature, the selected provider, applicable users and rooms, permitted data categories, purpose, creation time, expiry, and revocation time. Cloud STT, cloud LLM, cloud TTS, hosted conversational media, recording, SIP, and diagnostic upload use independent consent records.
+
+Revocation blocks new transmissions immediately, disables the adapter, clears temporary buffers, and removes the provider credential from the active runtime. The privacy interface provides provider-specific instructions for deleting any data previously retained by that provider.
+
+### 15.8 Validation Requirements
+
+Before deployment, the audio privacy controls must demonstrate that:
+
+1. Local processing failure cannot transmit audio unless cloud STT is separately enabled and authorized.
+2. Enabling cloud LLM or cloud TTS does not enable cloud STT.
+3. Unknown speakers, guest sessions, unapproved children, prohibited rooms, and mixed-consent groups remain local-only.
+4. The cloud indicator activates before transmission and indicator failure blocks transmission.
+5. Only the post-activation, duration-limited speech segment is sent.
+6. Revocation prevents the next request without requiring a service restart.
+7. Failure of one provider does not send data to another provider.
+8. Audit records identify the egress decision and provider without containing raw audio or sensitive response content.
+9. Self-hosted LiveKit room admission rejects expired, revoked, wrong-user, wrong-room, and wrong-audience tokens; reconnect grants cannot be used for a different session.
+10. LiveKit recording and external egress are absent or disabled in the default deployment.
+11. ElevenLabs receives only the approved redacted response text; provider credentials never reach a client device.
+12. LiveKit or ElevenLabs failure leaves local alerts and the independent safety path operational.
 
 ---
 
@@ -1211,6 +1318,8 @@ All conversation transcriptions are stored encrypted. Access control:
 | Satellite WiFi dropout | That room loses voice input | MQTT Last Will + satellite heartbeat | Auto-reconnect within 30s; other rooms unaffected |
 | AI server STT crash | No speech recognition | Docker health check | Auto-restart; wall panel falls back to touch input |
 | Piper TTS crash | No voice output | Docker health check | Auto-restart; notifications delivered as push instead |
+| Self-hosted LiveKit unavailable | Mobile/browser full-duplex voice unavailable | Health check and room-join failure | Fall back to typed commands or explicit upload; local room and safety audio continue |
+| ElevenLabs unavailable, rate-limited, or spending ceiling reached | Premium cloud voice unavailable | Adapter outcome and budget monitor | Do not try another cloud provider; offer an explicit local Piper repeat for ordinary responses |
 | Snapcast server crash | No multi-room audio | Docker health check | Auto-restart; individual speakers fall back to direct WiFi |
 | Wake word false activation | Unintended listening | VAD clears within 3s if no speech follows | Tune sensitivity; log false activations for model improvement |
 | AEC failure (echo) | STT hears itself | Detected by VAD detecting speech when no one is home | Recalibrate AEC reference signal |
@@ -1260,6 +1369,7 @@ If the AI server is completely offline:
 |----------|------|
 | Snapcast | Free |
 | Piper TTS | Free |
+| LiveKit server and Agents framework | Open-source software; self-hosting compute and operations remain deployment costs |
 | faster-whisper | Free |
 | openWakeWord | Free |
 | SpeechBrain | Free |
@@ -1294,17 +1404,15 @@ If the AI server is completely offline:
 
 **Decision:** faster-whisper large-v3-turbo. Best accuracy while remaining fully local. The 1.5s latency is acceptable and will improve with hardware advances.
 
-### 18.3 Piper vs. Coqui TTS vs. ElevenLabs (Local) vs. Commercial
+### 18.3 Speech Provider Decision
 
-| System | Quality | Latency | Privacy | Languages |
-|--------|---------|---------|---------|-----------|
-| **Piper** | ★★★★ | <200ms | ★★★★★ | 30+ |
-| Coqui TTS | ★★★ | ~400ms | ★★★★★ | 20+ |
-| XTTS (Coqui) | ★★★★★ | ~1s | ★★★★★ | 17 |
-| ElevenLabs (cloud) | ★★★★★ | ~0.5s | ★★★ | 30+ |
-| Azure Neural | ★★★★★ | ~0.5s | ★★ | 100+ |
+| System | Deployment | Intended role | Principal trade-off |
+|--------|------------|---------------|---------------------|
+| **Piper** | Local | Required default and offline voice | Resilience and privacy with less expressive output on some voices |
+| **XTTS** | Local | Optional premium local voice and approved voice cloning | Higher compute and operational cost |
+| **ElevenLabs** | Cloud | Optional expressive streaming voice | External data processing, network dependency, variable price, and provider availability |
 
-**Decision:** Piper as primary (best latency, good quality). XTTS as optional upgrade for highest-quality voice output (at cost of higher latency). Cloud TTS for unsupported languages only.
+**Decision:** retain Piper as the mandatory baseline, evaluate XTTS as the local quality option, and integrate ElevenLabs behind the provider-neutral adapter as an explicit opt-in. No provider is labelled “best” until a reproducible blind evaluation measures intelligibility, naturalness, pronunciation, time to first audio, completion latency, interruption behavior, resource use, availability, and representative household-language performance on the intended deployment.
 
 ---
 
@@ -1314,8 +1422,11 @@ If the AI server is completely offline:
 |------|-------------|--------|------------|
 | Wake word false activation rate too high | Medium | Medium — erodes trust, causes unintended actions | Tune sensitivity; require both wake word + VAD before streaming audio |
 | STT misinterprets command (e.g., "lights off" → "lights on") | Low-medium | Medium | Confirmation for irreversible actions; low-confidence triggers clarification |
-| Voice cloning attack (deepfake voice to issue commands) | Low (2026) | High | Voice ID for non-critical commands; require physical presence (wall panel) for security-critical actions |
+| Voice cloning attack (deepfake voice to issue commands) | Low (2026) | High | Treat voice ID as recognition evidence only; route sensitive requests through the Sensitive Action Gateway and require the action-specific fresh deliberate credential and confirmation |
 | Conversation logs accessed by unauthorized party | Low | High | Encryption at rest; access control; regular deletion |
+| Audio sent to a cloud provider without valid consent | Low | Very High | Separate feature consent; deny-by-default policy; pre-transmission indicator; egress audit; local-only behavior on uncertainty |
+| LiveKit media token or room scope permits unintended access | Low | Very High | Short-lived room-scoped grants; server-side authorization; opaque identifiers; admission and revocation tests |
+| Cloud TTS cost or usage grows unexpectedly | Medium | Medium | Per-user and household quotas; spending ceiling; usage alerts; local Piper default |
 | Satellite offline in bedroom during emergency | Low | High | Wall panel backup input; push notification fallback |
 | Audio fingerprinting by adversary (listening to satellite WiFi traffic patterns) | Very low | Medium | DTLS encryption on audio UDP stream; VLAN isolation |
 | Children unintentionally triggering commands | Medium | Low | Child profile — restricted command set; require wake word + PIN for sensitive actions in children's profile |
@@ -1356,6 +1467,9 @@ If the AI server is completely offline:
 14. **VITS TTS Paper** — Kim et al., 2021 — https://arxiv.org/abs/2106.06103
 15. **Picovoice Porcupine** — https://picovoice.ai/docs/porcupine/
 16. **CTranslate2** — https://github.com/OpenNMT/CTranslate2
+17. **LiveKit Agents** — https://docs.livekit.io/agents/
+18. **LiveKit Self-hosting** — https://docs.livekit.io/transport/self-hosting/
+19. **ElevenLabs Realtime TTS** — https://elevenlabs.io/docs/eleven-api/guides/how-to/websockets/realtime-tts
 17. **Mopidy Music Server** — https://mopidy.com/
 18. **XTTS (Coqui TTS)** — https://github.com/coqui-ai/TTS
 

@@ -20,7 +20,7 @@
 <!-- What alternatives did you consider and why did you choose this approach? -->
 
 ## Checklist
-- [ ] I have read the [Table of Contents](AI%20Home%20OS%20%E2%80%94%20Table%20of%20Contents.md) and understand the overall architecture
+- [ ] I have read the [Table of Contents](../AI%20Home%20OS%20%E2%80%94%20Table%20of%20Contents.md) and understand the overall architecture
 - [ ] My changes are consistent with the project's design philosophy (edge-first, privacy-first, HA as subsystem)
 - [ ] I have included Mermaid diagrams where appropriate
 - [ ] I have added hardware/software recommendations where relevant

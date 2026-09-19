@@ -1,6 +1,8 @@
 # AI Home OS
 ## A Context-Aware Autonomous Intelligence Platform for Smart Homes, Buildings, and Energy Management
 
+> **Implementation status:** This repository is a draft specification. Nothing described here has been implemented or validated yet. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
 ### Internal Design Specification — Master Table of Contents
 
 ---
@@ -27,8 +29,8 @@ Each chapter is produced as a separate file and is self-contained with architect
 | 01 | `Chapter-01-Physical-Infrastructure.md` | Physical Infrastructure | Network topology, VLANs, PoE, WiFi, compute hardware, storage, power redundancy, solar, UPS, generator, internet redundancy, security zones |
 | 02 | `Chapter-02-Sensor-Layer.md` | Sensor Layer | Every sensor category: presence, environmental, energy, water, sleep, occupancy, vehicle, weather, pool, soil — protocol, placement, failure modes, redundancy |
 | 03 | `Chapter-03-Vision-System.md` | Vision System | Frigate NVR, YOLOv10-M, RetinaFace/ArcFace facial recognition, pgvector embeddings, LPR, fall detection, privacy masking, GPU inference |
-| 04 | `Chapter-04-Audio-System.md` | Audio System | ESP32-S3 satellites, openWakeWord, faster-whisper STT, Piper TTS, SpeechBrain voice ID, Snapcast multi-room, Wyoming protocol |
-| 05 | `Chapter-05-Identity-System.md` | Identity System | Multi-modal identity: face + voice + BLE + UWB + WiFi + wearable. Bayesian confidence scoring, guest handling, presence state machine, GDPR |
+| 04 | `Chapter-04-Audio-System.md` | Audio System | ESP32-S3 satellites, openWakeWord, faster-whisper STT, Piper/XTTS local TTS, optional ElevenLabs cloud TTS, self-hosted LiveKit sessions, SpeechBrain voice ID, Snapcast multi-room |
+| 05 | `Chapter-05-Identity-System.md` | Identity System | Multi-modal identity: face + voice + BLE + UWB + WiFi + wearable, calibrated confidence fusion, guest handling, presence state machine, GDPR |
 | 06 | `Chapter-06-Memory-System.md` | Memory System | 6-tier memory: Redis working memory, episodic/semantic/procedural, Qdrant vector store, Neo4j knowledge graph, hybrid retrieval |
 | 07 | `Chapter-07-AI-Reasoning-Engine.md` | AI Reasoning Engine | Multi-agent architecture: 10 specialist agents, JARVIS Core coordinator, ReAct loop, Ollama client, tool registry, prompt injection defence |
 | 08 | `Chapter-08-Context-Engine.md` | Context Engine | 8 context dimensions, prayer time integration, 15 named situations, home mode state machine (HOME/AWAY/SLEEP/GUEST/VACATION/PARTY), anomaly detection |
@@ -36,10 +38,11 @@ Each chapter is produced as a separate file and is self-contained with architect
 | 10 | `Chapter-10-Energy-Intelligence.md` | Energy Intelligence | Solar/battery/grid management, EV OCPP charging, NILM load monitoring, MILP optimizer, dynamic tariffs, demand response, LLM energy reports |
 | 11 | `Chapter-11-Security-Architecture.md` | Security Architecture | STRIDE threat model, Zero Trust/mTLS, HashiCorp Vault, IAM/RBAC, Suricata IDS, GDPR erasure, hash-chained audit log, OWASP Top 10 |
 | 12 | `Chapter-12-API-and-Integration-Layer.md` | API & Integration Layer | REST/WebSocket/MQTT/gRPC, HA bridge, webhook system, plugin SDK, 11 third-party integrations, OpenTelemetry, OpenAPI |
-| 13 | `Chapter-13-Mobile-Application.md` | Mobile Application | React Native/Expo 52, Zustand, WatermelonDB offline, biometric auth, push notifications, iOS/Android widgets, WCAG AA |
-| 14 | `Chapter-14-Wall-Panels.md` | Wall Panels | RPi 5 + Waveshare 10.1" IPS, Chromium kiosk, React 18 + Vite, PIR/NFC/LED, 8 screens, entry panel with face recognition, BOM |
+| 13 | `Chapter-13-Mobile-Application.md` | Mobile Application | Flutter, Riverpod, Drift/SQLite offline cache, biometric auth, push notifications, iOS/Android widgets, WCAG AA |
+| 14 | `Chapter-14-Wall-Panels.md` | Wall Panels | RPi 5 + Waveshare 10.1" IPS, Chromium kiosk with Flutter Web, PIR/NFC/LED, 8 screens, entry panel with face recognition, BOM |
 | 15 | `Chapter-15-AI-Conversation-Examples.md` | AI Conversation Examples | 60+ realistic multi-turn conversations: morning routines, energy, security, Arabic, guests, children, proactive JARVIS, edge cases |
 | 16 | `Chapter-16-Future-Roadmap.md` | Future Roadmap | v1.x–v3.0 roadmap, RL optimizer, V2G, federated learning, zero-knowledge proofs, commercial deployments, open source strategy |
+| 17 | `Chapter-17-Deployment-and-Application-Architecture.md` | Deployment and Application Architecture | Backend-first product boundary, administration/mobile/panel/voice interfaces, Proxmox, HAOS VM, AI compute VM, GPU placement, failure domains, build order |
 
 ---
 
@@ -91,7 +94,8 @@ All architecture diagrams in this document use **Mermaid** syntax.
 | Sensor Firmware | ESPHome, Zigbee2MQTT |
 | Vision | Frigate NVR, YOLOv10-M, RetinaFace / ArcFace, pgvector |
 | Speech-to-Text | faster-whisper large-v3-turbo (local), Deepgram (cloud fallback) |
-| Text-to-Speech | Piper TTS en_GB-alan-medium (local) |
+| Text-to-Speech | Provider router: Piper default, XTTS optional local, ElevenLabs optional consent-gated cloud |
+| Conversational Media | Self-hosted LiveKit for authorized mobile, browser, and wall-panel WebRTC sessions |
 | LLM (Local) | Ollama + Llama 3.3 70B / Phi-4 14B / Mistral 7B |
 | LLM (Cloud) | GPT-4o / Claude 3.5 Sonnet (optional fallback) |
 | Message Bus | MQTT (Mosquitto), Redis Pub/Sub |
@@ -101,13 +105,16 @@ All architecture diagrams in this document use **Mermaid** syntax.
 | Knowledge Graph | Neo4j |
 | Cache | Redis |
 | Object Storage | MinIO (local) |
-| Container Runtime | Docker Compose (residential) / k3s (commercial) |
-| Orchestration | k3s — Kubernetes edge |
+| Virtualization | Proxmox VE with separate Home Assistant OS and AI compute VMs |
+| Application Runtime | Docker Compose inside the residential AI compute VM |
+| Commercial Orchestration | Candidate k3s design; requires separate validation |
 | Monitoring | Prometheus + Grafana |
 | Logging | Loki + Grafana |
 | API Gateway | Traefik / Caddy |
-| Mobile | React Native (Expo SDK 52) |
-| Wall Panel UI | React 18 + Vite (Chromium kiosk on RPi 5) |
+| Shared Client Framework | Flutter + Dart + Riverpod |
+| Mobile | Flutter for Android and iOS |
+| Wall Panel UI | Flutter Web in Chromium kiosk on RPi 5 |
+| Administration UI | Flutter Web for the application-style owner and installer console |
 | Energy Platform | Solar inverter Modbus + OCPP 2.0.1 + TimescaleDB |
 
 ---

@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -778,7 +780,7 @@ GENERAL:
 
 #### AI Integration
 
-- Gas detector alarm → AI immediately: closes smart gas shutoff valve (if installed), alerts user with urgent voice + push notification, unlocks external doors, disables any electric ignition sources
+- A gas detector reports a life-safety alarm directly to the independent local safety controller. The controller validates the configured alarm input and executes only the approved site plan, which may close a listed gas shutoff valve, isolate specifically approved ignition circuits, activate local alarms, and issue configured notifications. Door operation is limited to designated evacuation doors through `evacuation.unlock`; the AI, API, plugins, and general Automation Engine cannot unlock exterior doors from a gas event.
 - Smart gas shutoff valve: **Dome DMDP1** (Z-Wave) or **Watts 9D-LFSV series** (wired, dry contact trigger from gas sensor)
 
 ---

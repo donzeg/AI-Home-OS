@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -404,6 +406,8 @@ ROLE_PERMISSIONS = {
 }
 ```
 
+RBAC entries establish eligibility only. They do not satisfy fresh authentication, confirmation, initiator, context, or execution requirements in Section 5.4.
+
 ### 5.2 JWT Token Structure
 
 ```python
@@ -463,35 +467,96 @@ class MFAService:
         # Allow 30s window on each side to account for clock drift
         return totp.verify(code, valid_window=1)
 
-    async def enforce_mfa_for_sensitive_action(
-        self,
-        person_id: str,
-        action: str,
-        mfa_token: Optional[str]
-    ) -> bool:
-        """
-        Actions that always require fresh MFA:
-        - disarm alarm
-        - unlock front door remotely
-        - add/remove users
-        - view camera footage
-        - change security settings
-        """
-        SENSITIVE_ACTIONS = {
-            'alarm.disarm', 'lock.unlock_remote', 'users.add',
-            'users.remove', 'cameras.view_historic', 'settings.security'
-        }
-
-        if action not in SENSITIVE_ACTIONS:
-            return True  # No MFA needed for non-sensitive action
-
-        if not mfa_token:
-            return False
-
-        return self.verify_totp(person_id, mfa_token)
 ```
 
-### 5.4 Session Management
+### 5.4 Authoritative Sensitive Action Policy
+
+This section is the single authority for security-sensitive actions. Identity recognition, LLM tools, APIs, plugins, wall panels, mobile clients, and automations must call the Sensitive Action Gateway. They must not implement weaker local rules or call Home Assistant directly for these actions.
+
+Authentication, authorization, confirmation, and execution policy are separate checks:
+
+1. **Authentication** proves who the requester is using an approved credential.
+2. **Authorization** checks whether that authenticated principal may perform the action on the target.
+3. **Confirmation** records deliberate intent for this action and target; confirmation is not authentication.
+4. **Execution policy** determines whether this initiator, location, and automation path may execute the action.
+
+| Canonical action | Allowed initiators | Required role | Authentication and freshness | Confirmation | Automation / LLM policy | Failure behavior |
+|------------------|--------------------|---------------|------------------------------|--------------|-------------------------|------------------|
+| `lock.exterior` | Mobile, wall panel, voice request, API | Resident | Current authenticated session | Target confirmation when ambiguous | Approved deterministic automation allowed; LLM request-only | Fail closed |
+| `unlock.exterior.local` | Local wall panel, physical reader, mobile | Authorized resident | Deliberate fingerprint, PIN, NFC, or device-bound mobile authentication within 60 seconds | Confirm exact door | General automation prohibited; LLM request-only | Fail closed; never queue |
+| `unlock.exterior.remote` | Trusted mobile device | Authorized resident or owner | Fresh MFA on trusted device within 120 seconds | Confirm exact door | Automation and LLM execution prohibited | Fail closed; never queue |
+| `garage.open` / `gate.open` | Local panel or trusted mobile device | Authorized resident | Same as exterior unlock for local or remote context | Confirm exact target | General automation prohibited; LLM request-only | Fail closed; never queue |
+| `alarm.arm` | Mobile, wall panel, voice request, approved automation | Resident | Current authenticated session; approved automation uses a service identity | Confirm mode when manually requested | Deterministic approved automation allowed; LLM request-only | Fail closed |
+| `alarm.disarm` | Local panel or trusted mobile device | Authorized resident | Fresh deliberate credential locally or MFA remotely, within 120 seconds | Confirm protected area | General automation and LLM execution prohibited | Fail closed; never queue |
+| `camera.live.view` | Mobile or wall panel | Authorized resident | Current session locally; reauthentication within 5 minutes remotely | No additional confirmation | LLM and automation prohibited | Fail closed |
+| `camera.recording.view` | Mobile or wall panel | Authorized resident | Fresh MFA within 5 minutes | Confirm recording scope when broad | LLM and automation prohibited | Fail closed |
+| `credential.manage` | Trusted owner device | Owner | Fresh MFA within 5 minutes | Confirm affected user and change | LLM, plugin, and automation execution prohibited | Fail closed |
+| `security.settings.change` | Trusted owner device | Owner | Fresh MFA within 5 minutes | Confirm changed control | LLM, plugin, and automation execution prohibited | Fail closed |
+| `security.records.delete` | None through normal runtime | None | Administrative recovery procedure | Dual approval where supported | Prohibited | Preserve records |
+| `evacuation.unlock` | Local safety controller only | Safety service identity | Mutually authenticated service; validated local alarm input | Not applicable | Deterministic safety rule only; LLM, API, plugin, and general automation prohibited | Follow approved site safety plan |
+
+Recognition confidence may prefill a claimed identity, but it never satisfies authentication. Credentials are submitted directly to the authentication service and are never exposed to an LLM.
+
+```python
+class SensitiveActionGateway:
+    async def authorize_and_execute(
+        self,
+        request: SensitiveActionRequest,
+        auth_context: AuthenticationContext,
+    ) -> ActionResult:
+        # Resolve contextual requests such as unlock.exterior into the local or
+        # remote canonical action before any policy decision.
+        canonical_action = sensitive_action_registry.resolve(
+            request.action, request.context
+        )
+        policy = sensitive_action_registry.get(canonical_action)
+        if not policy:
+            return ActionResult.reject('unregistered_sensitive_action')
+
+        if request.initiator not in policy.allowed_initiators:
+            return ActionResult.reject('initiator_not_allowed')
+        if canonical_action == 'evacuation.unlock':
+            return ActionResult.reject('safety_controller_only')
+        if not auth_context.meets(
+            credential=policy.required_credential(request.context),
+            maximum_age=policy.maximum_authentication_age(request.context),
+        ):
+            return ActionResult.challenge('fresh_authentication_required')
+        if not authorization.allows(
+            auth_context.principal,
+            canonical_action,
+            request.target,
+        ):
+            return ActionResult.reject('not_authorized')
+        if policy.requires_confirmation and not request.confirmation.matches(
+            action=canonical_action,
+            target=request.target,
+        ):
+            return ActionResult.challenge('targeted_confirmation_required')
+
+        result = await signed_command_bus.execute_now(request)
+        await security_audit.record_action(request, auth_context, result)
+        return result
+```
+
+The gateway is wrapped by policy-decision audit middleware, so challenges and rejections are recorded as well as successful execution. The gateway issues immediate, signed commands using Section 8.3. Sensitive actions marked `never queue` are rejected when their target controller is unavailable and require a new authenticated request.
+
+#### 5.4.1 Emergency Safety Exception
+
+`evacuation.unlock` is isolated from the normal action gateway. It runs only in the local deterministic safety controller, uses validated alarm inputs and designated evacuation doors, has no LLM or cloud dependency, and produces an immutable audit event. Sensor corroboration is required where supported by the installed life-safety system. Its behavior, including any emergency notification, must follow the approved site configuration and applicable local fire, building, and alarm requirements.
+
+#### 5.4.2 Validation Requirements
+
+1. Voice, mobile, wall panel, API, plugin, and automation requests produce the same policy decision for equivalent context.
+2. Recognition confidence and verbal confirmation cannot satisfy a credential challenge.
+3. Every exterior unlock requires fresh deliberate authentication and is never queued.
+4. Alarm disarm cannot execute through an LLM, plugin, or general automation path.
+5. Internal service credentials cannot bypass the action-specific role and initiator rules.
+6. Revoked roles, credentials, sessions, and automation approvals take effect before execution.
+7. The emergency exception is callable only by the mutually authenticated local safety controller.
+8. Audit events contain principal, initiator, action, target, authentication method and age, policy decision, and outcome without containing credentials.
+
+### 5.5 Session Management
 
 ```python
 class SessionManager:
@@ -757,35 +822,181 @@ max_queued_messages 100
 
 ### 8.3 MQTT Message Signing
 
-For critical commands (lock/unlock, alarm arm/disarm), MQTT messages are signed:
+Critical commands such as lock/unlock and alarm arm/disarm use a signed command envelope. A valid signature proves integrity and issuer possession of a key; replay protection additionally requires one-time consumption of the command ID and nonce.
+
+Each authorized issuer has a separate signing key stored in Vault. The verifier selects the key from the authenticated MQTT client identity, not from an untrusted payload field. Broker mTLS identity and topic ACLs remain mandatory.
 
 ```python
-import hmac, hashlib, time, json
+import hashlib
+import hmac
+import json
+import secrets
+import time
+import uuid
+
+COMMAND_TTL_SECONDS = 10
+REPLAY_RETENTION_SECONDS = 60
+
+def canonical_json(payload: dict) -> bytes:
+    """Produce identical bytes at the signer and verifier."""
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(',', ':'),
+        ensure_ascii=False,
+    ).encode('utf-8')
 
 class MQTTMessageSigner:
-    def __init__(self, secret_key: bytes):
-        self.key = secret_key
+    def __init__(self, issuer: str, secret_key: bytes):
+        self.issuer = issuer
+        self.secret_key = secret_key
 
-    def sign_payload(self, payload: dict) -> dict:
-        payload['ts'] = int(time.time())   # Timestamp for replay protection
-        payload['nonce'] = secrets.token_hex(8)
-        body = json.dumps(payload, sort_keys=True).encode()
-        sig = hmac.new(self.key, body, hashlib.sha256).hexdigest()
-        return {**payload, 'sig': sig}
+    def sign_command(
+        self,
+        audience: str,
+        action: str,
+        target: str,
+        arguments: dict,
+    ) -> dict:
+        now = int(time.time())
+        envelope = {
+            'version': 1,
+            'command_id': str(uuid.uuid4()),
+            'issuer': self.issuer,
+            'audience': audience,
+            'action': action,
+            'target': target,
+            'arguments': arguments,
+            'issued_at': now,
+            'expires_at': now + COMMAND_TTL_SECONDS,
+            'nonce': secrets.token_hex(16),
+        }
+        signature = hmac.new(
+            self.secret_key,
+            canonical_json(envelope),
+            hashlib.sha256,
+        ).hexdigest()
+        return {**envelope, 'signature': signature}
 
-    def verify_payload(self, payload: dict) -> bool:
-        received_sig = payload.pop('sig', None)
-        if not received_sig:
-            return False
+class MQTTCommandVerifier:
+    def __init__(self, replay_store, key_store, authorization_policy):
+        self.replay_store = replay_store
+        self.key_store = key_store
+        self.authorization_policy = authorization_policy
 
-        # Replay protection: reject messages older than 30 seconds
-        if abs(time.time() - payload.get('ts', 0)) > 30:
-            return False
+    async def verify(
+        self,
+        received: dict,
+        authenticated_client_id: str,
+        receiver_id: str,
+    ) -> VerificationResult:
+        # Work on a copy; verification must not mutate the caller's payload.
+        envelope = received.copy()
+        received_signature = envelope.pop('signature', None)
+        if not received_signature:
+            return VerificationResult.reject('missing_signature')
 
-        body = json.dumps(payload, sort_keys=True).encode()
-        expected_sig = hmac.new(self.key, body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(received_sig, expected_sig)
+        required = {
+            'version', 'command_id', 'issuer', 'audience', 'action',
+            'target', 'arguments', 'issued_at', 'expires_at', 'nonce',
+        }
+        if set(envelope) != required or envelope['version'] != 1:
+            return VerificationResult.reject('invalid_envelope')
+
+        # Bind the message to the mTLS-authenticated publisher and receiver.
+        if envelope['issuer'] != authenticated_client_id:
+            return VerificationResult.reject('issuer_mismatch')
+        if envelope['audience'] != receiver_id:
+            return VerificationResult.reject('wrong_audience')
+
+        # Select a per-issuer key using trusted connection identity.
+        secret_key = await self.key_store.for_mqtt_client(
+            authenticated_client_id
+        )
+        if not secret_key:
+            return VerificationResult.reject('unknown_issuer')
+
+        expected_signature = hmac.new(
+            secret_key,
+            canonical_json(envelope),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(received_signature, expected_signature):
+            return VerificationResult.reject('invalid_signature')
+
+        now = int(time.time())
+        if envelope['issued_at'] > now + 2:
+            return VerificationResult.reject('issued_in_future')
+        if envelope['expires_at'] <= now:
+            return VerificationResult.reject('expired_command')
+        if envelope['expires_at'] - envelope['issued_at'] > COMMAND_TTL_SECONDS:
+            return VerificationResult.reject('invalid_validity_window')
+
+        if not self.authorization_policy.allows(
+            issuer=authenticated_client_id,
+            audience=receiver_id,
+            action=envelope['action'],
+            target=envelope['target'],
+        ):
+            return VerificationResult.reject('command_not_authorized')
+
+        # consume_once uses a Redis transaction or Lua script to create two
+        # independent NX keys atomically: one for command_id and one for nonce.
+        # Reuse of either value rejects the entire operation. Critical commands
+        # fail closed if the replay store is unavailable.
+        try:
+            first_use = await self.replay_store.consume_once(
+                issuer=authenticated_client_id,
+                command_id=envelope['command_id'],
+                nonce=envelope['nonce'],
+                ttl=REPLAY_RETENTION_SECONDS,
+            )
+        except ReplayStoreUnavailable:
+            audit_log.record('mqtt_replay_store_unavailable',
+                             command_id=envelope['command_id'])
+            return VerificationResult.reject('replay_protection_unavailable')
+
+        if not first_use:
+            audit_log.record('mqtt_command_replayed',
+                             command_id=envelope['command_id'],
+                             issuer=authenticated_client_id)
+            return VerificationResult.reject('replayed_command')
+
+        return VerificationResult.accept(envelope)
 ```
+
+The receiving controller also enforces idempotency. It stores the result for each successfully executed `command_id`. When verification rejects an exact redelivery as a replay, the ingress layer may return that stored result to the authenticated issuer, but it must not submit the command for execution again.
+
+```python
+async def execute_verified_command(command: dict) -> CommandResult:
+    previous = await command_results.get(command['command_id'])
+    if previous:
+        # Defense in depth if a duplicate reaches the execution boundary.
+        return previous
+
+    result = await physical_controller.execute(command)
+    await command_results.store(
+        command['command_id'],
+        result,
+        ttl=REPLAY_RETENTION_SECONDS,
+    )
+    return result
+```
+
+Audit logs record invalid signatures, unknown issuers, wrong audiences, expired commands, authorization failures, replay attempts, and replay-store outages without recording signing keys or sensitive command arguments.
+
+#### 8.3.1 Validation Requirements
+
+Before deployment, the command path must demonstrate that:
+
+1. Concurrent delivery of an identical command results in one acceptance and one physical action.
+2. Reuse of either a `command_id` or nonce during the retention window is rejected.
+3. A valid command addressed to one controller is rejected by every other controller.
+4. A payload signed by one issuer cannot claim another issuer's identity.
+5. Expired commands and commands issued outside the permitted clock-skew window are rejected.
+6. Lock and alarm commands fail closed when the replay store or issuer key is unavailable.
+7. MQTT redelivery returns the stored result without repeating the physical action.
+8. Key rotation supports a short, identified overlap period without reverting to a shared system-wide key.
 
 ---
 
@@ -989,13 +1200,15 @@ advanced:
 
 ## 11. AI Model Security
 
-### 11.1 Prompt Injection Prevention
+### 11.1 Prompt Injection Risk Controls
+
+No text filter or prompt format can guarantee prevention of prompt injection. User speech, calendar entries, web content, messages, memory records, plugin output, and device metadata are treated as untrusted data rather than instructions. Their source, owner, trust level, and permitted purpose travel with the content into the reasoning pipeline.
 
 ```python
-class PromptSanitizer:
+class UntrustedInputInspector:
     """
-    Prevent adversarial inputs from hijacking LLM system prompts.
-    Applied to all user inputs before LLM calls.
+    Detect common indicators for audit and risk scoring. A clean result does
+    not establish that content is safe and never grants a tool permission.
     """
     MAX_INPUT_LENGTH = 2000
 
@@ -1017,24 +1230,32 @@ class PromptSanitizer:
         r'dan\s+mode',
     ]
 
-    def sanitize(self, user_input: str, context: dict) -> str:
-        # Length check
+    def inspect(self, user_input: str, source: ContentSource) -> InputAssessment:
         if len(user_input) > self.MAX_INPUT_LENGTH:
             user_input = user_input[:self.MAX_INPUT_LENGTH]
 
-        # Pattern detection
+        indicators = []
         for pattern in self.INJECTION_PATTERNS:
             if re.search(pattern, user_input, re.IGNORECASE):
-                audit_log.record('prompt_injection_attempt',
-                    pattern=pattern, input_hash=hashlib.sha256(user_input.encode()).hexdigest())
-                raise SecurityError("Potential prompt injection detected")
+                indicators.append(pattern)
 
-        # Structural escaping: wrap user content in delimiter
-        # This prevents user text from escaping the user message role
-        sanitized = user_input.replace('<', '&lt;').replace('>', '&gt;')
-
-        return sanitized
+        assessment = InputAssessment(
+            content=user_input,
+            source=source,
+            trust='untrusted',
+            indicators=indicators,
+        )
+        audit_log.record('untrusted_input_assessed',
+            source=source.kind, indicators=indicators,
+            input_hash=hashlib.sha256(user_input.encode()).hexdigest())
+        return assessment
 ```
+
+The reasoning engine keeps system policy in a separate trusted channel and serializes external content into typed data fields with explicit boundaries. Retrieved text cannot add permissions, redefine policy, select credentials, or silently become an instruction. Pattern detection may block or flag obvious attacks, but authorization never depends on a detector declaring content safe.
+
+Tool access is deny-by-default and scoped to the authenticated principal, current task, trusted content sources, and minimum required data. Tool arguments use strict schemas; entity identifiers are resolved against authorized resources; outputs are checked before they re-enter model context. Side effects pass through the policy-owning service, and all Chapter 11 Section 5.4 actions pass through the Sensitive Action Gateway. The model never receives credentials or direct access to the underlying message bus, database, shell, network, or Home Assistant control interface.
+
+Tests include direct and indirect injections in voice transcripts, calendar events, stored memory, retrieved web pages, plugin output, and tool results. Success means the injected content cannot expand tool scope, disclose unrelated data, bypass confirmation, or execute a sensitive action; it does not mean every malicious phrase is detected.
 
 ### 11.2 LLM Output Validation
 
@@ -1053,6 +1274,10 @@ class LLMOutputValidator:
     }
 
     def validate_tool_call(self, tool_name: str, tool_args: dict) -> ValidationResult:
+        tool = tool_registry.get(tool_name)
+        if not tool or not current_capability_set.allows(tool_name):
+            return ValidationResult(valid=False, reason='tool_not_allowed')
+
         # Block dangerous tools from LLM invocation
         if tool_name in self.BLOCKED_TOOL_CALLS:
             return ValidationResult(
@@ -1061,7 +1286,7 @@ class LLMOutputValidator:
             )
 
         # Validate argument types against tool schema
-        schema = tool_registry.get_schema(tool_name)
+        schema = tool.schema
         if schema:
             try:
                 schema.validate(tool_args)
@@ -1070,10 +1295,10 @@ class LLMOutputValidator:
 
         # Check if LLM is hallucinating entity IDs
         if 'entity_id' in tool_args:
-            if not ha.entity_exists(tool_args['entity_id']):
+            if not authorized_entities.contains(tool_args['entity_id']):
                 return ValidationResult(
                     valid=False,
-                    reason=f"Entity '{tool_args['entity_id']}' does not exist"
+                    reason='entity_missing_or_not_authorized'
                 )
 
         return ValidationResult(valid=True)

@@ -1,5 +1,7 @@
 # AI Home OS (Draft Architecture)
 
+> **Implementation status:** This repository is a draft specification. Nothing described here has been implemented or validated yet. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
 ## Vision
 Build a proactive AI-powered home that can perceive, remember, reason, converse, and act autonomously.
 
@@ -7,8 +9,10 @@ Build a proactive AI-powered home that can perceive, remember, reason, converse,
 - Context over simple automation
 - Privacy-first where possible
 - Modular services
-- Home Assistant as orchestration layer
+- Home Assistant as the device abstraction and execution subsystem
 - AI models for reasoning, not direct device control
+
+The reference deployment and application boundaries are defined in [Chapter 17](docs/Chapter-17-Deployment-and-Application-Architecture.md): separate Home Assistant OS and AI compute VMs on Proxmox, a continuously running backend platform, and distinct administration, mobile, wall-panel, voice, and Home Assistant interfaces.
 
 # Architecture
 
@@ -41,6 +45,8 @@ Build a proactive AI-powered home that can perceive, remember, reason, converse,
 ### Audio
 - Ceiling microphones or room microphones
 - Multi-room speakers
+- Self-hosted LiveKit for authorized mobile, browser, and wall-panel conversational sessions
+- Piper as the required local voice, XTTS as an optional local quality profile, and ElevenLabs as an optional consent-gated cloud TTS provider
 
 ## Layer 2 – Memory
 Store:
@@ -83,6 +89,13 @@ Controlled via Home Assistant:
 
 ## Layer 5 – Conversation
 Wake word or continuous presence.
+
+Conversation media follows two paths:
+- Room satellites, local STT, Piper, and Snapcast provide the offline-capable household path.
+- Self-hosted LiveKit provides full-duplex WebRTC sessions for mobile, browser, and capable wall-panel clients.
+
+LiveKit transports media but does not own identity, memory, authorization, tool execution, or device policy. ElevenLabs may synthesize approved response text only after the cloud-TTS consent and egress policy passes. Neither service may directly control Home Assistant or bypass the Sensitive Action Gateway.
+
 Conversation examples:
 - "Welcome home."
 - "You have a meeting in 30 minutes."
@@ -131,6 +144,9 @@ Conversation examples:
 - Ollama (local) and/or GPT/Claude/Gemini
 - Whisper STT
 - Piper TTS
+- XTTS (optional local voice profile)
+- LiveKit (self-hosted conversational media plane)
+- ElevenLabs streaming TTS (optional cloud provider, disabled by default)
 
 # Future Vision
 Introduce specialized agents:

@@ -2,8 +2,10 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -191,7 +193,7 @@ graph LR
 | 40 | CAMERAS | 192.168.40.0/24 | IP cameras and doorbell | None | RTSP port 554 to MGMT only |
 | 50 | SENSORS | 192.168.50.0/24 | ESPHome, Zigbee/Z-Wave coordinators | OTA firmware only | MQTT port 1883/8883 to MGMT only |
 | 60 | GUEST | 192.168.60.0/24 | Temporary visitor devices | Full internet only | None |
-| 70 | VOICE | 192.168.70.0/24 | VoIP, wall panels, speaker nodes | None | WebSocket/API to MGMT only |
+| 70 | VOICE | 192.168.70.0/24 | VoIP, wall panels, speaker nodes | None | HTTPS, control WebSocket, and WebRTC media to approved MGMT services only |
 
 ### 4.2 Firewall Rule Philosophy
 
@@ -204,11 +206,15 @@ Rule Priority (highest to lowest):
    - IoT → MGMT: TCP/UDP 1883 (MQTT), 8883 (MQTT TLS)
    - Camera → MGMT: TCP 554 (RTSP), UDP 5004 (RTP)
    - Sensor → MGMT: TCP/UDP 1883, 8883
-   - Voice → MGMT: TCP 6789 (WS), 443 (HTTPS API)
+   - Voice → MGMT: TCP 443 (HTTPS/control WebSocket and LiveKit signaling), plus only the configured LiveKit WebRTC media range
    - Trusted → MGMT: TCP 443 (dashboard only)
 4. ALLOW outbound internet for MGMT (selective by destination)
 5. DENY all else
 ```
+
+The self-hosted LiveKit server and AI Home OS media participant run in the MANAGEMENT zone. Voice clients receive no general MANAGEMENT access: firewall aliases restrict them to the API gateway and LiveKit signaling/media listeners. The deployment pins and documents its WebRTC UDP range rather than exposing an unrestricted ephemeral range. Room satellites that use the direct local audio path do not need LiveKit access.
+
+Remote LiveKit sessions traverse the authenticated WireGuard path described in Section 13.3. The initial design exposes no public LiveKit listener. If a later deployment requires TURN or public WebRTC ingress, it must place that service in a separate ingress zone with narrow relay rules, short-lived credentials, rate limits, denial-of-service controls, and no route to device, sensor, camera, database, or management networks.
 
 ### 4.3 DNS Architecture
 
@@ -661,9 +667,8 @@ max_inflight_messages 100
 
 ### 8.1 AI Server — Primary Compute Node
 
-The AI server is the most critical piece of hardware in the entire deployment. It runs:
+The AI compute server is the primary host for local inference and AI Home OS services. Under the reference residential topology in Chapter 17, the physical host runs Proxmox, Home Assistant runs in a dedicated Home Assistant OS VM, and the following workloads run in the separate AI compute VM:
 
-- Home Assistant (containerized)
 - Frigate NVR (GPU-accelerated vision inference)
 - Ollama (local LLM inference)
 - Whisper STT (local speech recognition)
@@ -674,7 +679,7 @@ The AI server is the most critical piece of hardware in the entire deployment. I
 - Redis (cache + pub/sub)
 - Mosquitto MQTT broker
 - Zigbee2MQTT + Z-Wave JS
-- All Docker/Kubernetes services
+- AI Home OS Docker services
 
 This is not a Raspberry Pi workload. This requires a real server.
 
@@ -728,22 +733,16 @@ If a full NVIDIA GPU is not in budget, a Google Coral TPU can accelerate Frigate
 | Large home / villa | Xeon W / Ryzen Threadripper | 128 GB | RTX 4090 24 GB | 4 TB NVMe |
 | Commercial / office | Dual server, Kubernetes cluster | 256 GB | 2× RTX 4090 or A4000 | NAS-backed |
 
-### 8.4 Containerization Strategy
+### 8.4 Virtualization and Containerization Strategy
 
-All services run in **Docker containers**, orchestrated by **Docker Compose** for a single-node residential deployment, or **k3s (lightweight Kubernetes)** for multi-node or commercial deployments.
+The reference residential deployment uses **Proxmox VE** on the physical compute host, a dedicated **Home Assistant OS VM**, and a separate Linux **AI compute VM**. Docker Compose runs AI Home OS application and data services inside the AI VM. Chapter 17 is authoritative for VM boundaries, GPU placement, failure domains, interfaces, and build order.
+
+Home Assistant is intentionally absent from the AI VM composition. Restarting, rebuilding, or saturating the AI VM must not stop Home Assistant. A commercial deployment may evaluate k3s or multiple physical nodes after the residential vertical slice is validated; k3s is not a requirement for the initial implementation.
 
 ```yaml
 # docker-compose.yml (abbreviated reference)
 version: "3.9"
 services:
-
-  homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable
-    network_mode: host
-    volumes:
-      - ./ha-config:/config
-    restart: unless-stopped
-    privileged: true
 
   mosquitto:
     image: eclipse-mosquitto:2
@@ -814,7 +813,7 @@ services:
 
 | Service | CPU | RAM | GPU VRAM | Storage |
 |---------|-----|-----|----------|---------|
-| Home Assistant | 1 core | 512 MB | 0 | 1 GB |
+| Home Assistant OS VM | 2–4 cores | 4–8 GB | 0 | 64–128 GB virtual disk |
 | Frigate (4 cameras) | 2 cores | 2 GB | 2–4 GB | 500 GB (recordings) |
 | Ollama (Llama 3.3 8B) | 4 cores | 8 GB | 8 GB | 5 GB (model) |
 | Ollama (Llama 3.3 70B Q4) | 8 cores | 4 GB | 40 GB | 40 GB (model) |
@@ -831,6 +830,8 @@ services:
 | AI Agents (JARVIS Core) | 4 cores | 4 GB | 0 | 1 GB |
 | **Total (8B model)** | **~22 cores** | **~30 GB** | **~16 GB** | **~600 GB** |
 | **Total (70B model)** | **~26 cores** | **~30 GB** | **~50 GB** | **~650 GB** |
+
+The table is an early workload inventory rather than a validated allocation. Home Assistant receives its own reserved VM resources under Chapter 17. AI workload totals cannot be used as purchasing requirements until the selected models, camera count, concurrency, quantization, and GPU-sharing profile are measured and linked from `IMPLEMENTATION_STATUS.md`.
 
 ---
 
@@ -1171,7 +1172,9 @@ flowchart LR
 | Mobile app remote access | Yes (optional) | Wireguard VPN tunnel home |
 | OTA firmware updates | Yes | Scheduled, not time-critical |
 | Cloud CCTV backup | Yes (optional) | Privacy risk — not recommended |
-| Voice cloud fallback (Deepgram) | Yes | Only when Whisper quality is insufficient |
+| Optional cloud STT | Yes, only when separately enabled | Explicit provider/room/user consent; never triggered automatically by local STT quality or failure |
+| Optional ElevenLabs TTS | Yes, only when separately enabled | Sends approved redacted response text under the cloud-TTS consent and spending policy |
+| Self-hosted LiveKit | No | Local/VPN conversational media plane; public ingress and LiveKit Cloud disabled by default |
 
 ### 13.3 Remote Access Architecture
 
@@ -1326,7 +1329,7 @@ Remote Access Flow:
 | GPU sharing | Single GPU | Per-node GPU |
 | Maintenance | Simple | Requires cluster management |
 
-**Decision:** Single server for residential deployments. k3s cluster for commercial/enterprise deployments where uptime SLA is required. Chapter 16 (Roadmap) covers the cluster migration path.
+**Decision:** One Proxmox physical host with separate Home Assistant OS and AI compute VMs is the reference residential topology. This provides maintenance and workload isolation but remains one physical failure domain. A resilient residential installation places Home Assistant on separate physical hardware. Commercial clustering requires a separate measured design; Chapter 17 defines these profiles.
 
 ### 16.3 NUC vs. Custom Tower Server
 

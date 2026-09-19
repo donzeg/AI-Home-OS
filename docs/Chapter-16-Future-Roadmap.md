@@ -2,19 +2,21 @@
 
 **AI Home OS Internal Design Specification**  
 **Classification:** Internal — Engineering  
-**Status:** Draft v1.0  
+**Status:** Draft specification v1.0
 **Date:** 2026-07-17
+
+> **Implementation status:** Specification only. Nothing in this chapter has been implemented or validated yet. Unless explicitly marked otherwise, code, schemas, configurations, performance figures, and operational flows are illustrative proposals. See [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ---
 
 ## Table of Contents
 
 1. [Introduction](#1-introduction)
-2. [Current State — v1.0 Summary](#2-current-state--v10-summary)
+2. [Current State — Specification Only](#2-current-state--specification-only)
 3. [Version Roadmap Overview](#3-version-roadmap-overview)
-4. [v1.x — Consolidation (2026–2027)](#4-v1x--consolidation-20262027)
-5. [v2.0 — Autonomous Intelligence (2027–2028)](#5-v20--autonomous-intelligence-20272028)
-6. [v3.0 — Federated & Sovereign AI (2029–2031)](#6-v30--federated--sovereign-ai-20292031)
+4. [Proposed v1.x Implementation and Consolidation](#4-proposed-v1x-implementation-and-consolidation)
+5. [Proposed v2 — Autonomous Intelligence](#5-proposed-v2--autonomous-intelligence)
+6. [Proposed v3 — Federated and Sovereign AI](#6-proposed-v3--federated-and-sovereign-ai)
 7. [AI Model Evolution](#7-ai-model-evolution)
 8. [Hardware Evolution](#8-hardware-evolution)
 9. [Energy & Grid Evolution](#9-energy--grid-evolution)
@@ -33,23 +35,23 @@
 
 ## 1. Introduction
 
-This chapter charts the evolution of AI Home OS from its v1.0 foundation into a progressively more capable, more sovereign, and more broadly applicable platform. The roadmap is grounded in what is technically achievable with available and near-term hardware and software, not speculation.
+This chapter proposes a sequence for evolving the AI Home OS specification into an implemented platform. No AI Home OS version or runtime has been implemented yet. Dates and version numbers in this chapter are planning targets, not completed releases.
 
 The vision driving every version of AI Home OS is the same:
 
 > **A home that understands its inhabitants as individuals, respects their privacy absolutely, manages its resources autonomously, and requires no cloud dependency to function — delivered at a cost that is accessible to the upper-middle segment of the residential market.**
 
-Each version introduces capabilities that are *not possible* to retrofit without the architectural decisions made in v1. The edge-first, privacy-first, modular architecture of v1 is the foundation upon which every future capability is built.
+The proposed sequence reflects architectural dependencies identified in the specification. Those dependencies remain hypotheses until prototypes and integration evidence validate them.
 
 ---
 
-## 2. Current State — v1.0 Summary
+## 2. Current State — Specification Only
 
-Before charting the future, it is worth summarising what v1.0 delivers:
+The current repository is a draft specification. It contains no runnable services, applications, firmware, deployment manifests, migrations, automated tests, reference deployment, or validated hardware integration. The diagram below summarizes the intended v1 design scope rather than delivered capability. The authoritative status is maintained in [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
 ```mermaid
 mindmap
-  root((AI Home OS v1))
+  root((Proposed v1 scope))
     Physical
       7-VLAN network
       Cat6A infrastructure
@@ -93,21 +95,23 @@ mindmap
       Audit log
 ```
 
-### 2.1 v1.0 Capability Matrix
+### 2.1 Capability Status Matrix
 
-| Domain | v1.0 Capability | Maturity |
-|--------|----------------|----------|
-| Natural language | English + Arabic, local STT/TTS | High |
-| Presence detection | Multi-modal, room-level accuracy | High |
-| Energy optimisation | Rule-based + MILP solver | Medium |
-| Security | Zero Trust, RBAC, mTLS | High |
-| Automation | Trigger/condition/action, AI-generated | High |
-| Memory | 6-tier (Redis → Neo4j) | Medium |
-| Vision | Face recognition, object detection | Medium |
-| Learning | Preference observation, static rules | Low |
-| Multi-building | Single site only | Not present |
-| RL optimisation | Not present | Not present |
-| Federated learning | Not present | Not present |
+| Domain | Proposed capability | Specification status | Implementation status | Validation evidence |
+|--------|---------------------|----------------------|-----------------------|---------------------|
+| Natural language | English + Arabic, local STT/TTS | Specified | Not started | None |
+| Presence detection | Multi-modal, room-level presence | Specified | Not started | None |
+| Energy optimisation | Rule-based + MILP solver | Specified | Not started | None |
+| Security | Zero Trust, RBAC, mTLS | Specified | Not started | None |
+| Automation | Trigger/condition/action, AI-generated proposals | Specified | Not started | None |
+| Memory | Multi-tier Redis, PostgreSQL, vector, and graph design | Specified | Not started | None |
+| Vision | Face recognition and object detection | Specified | Not started | None |
+| Learning | Preference observation and static rules | Specified | Not started | None |
+| Multi-building | Future multi-site design | Concept | Not started | None |
+| RL optimisation | Future reinforcement-learning design | Concept | Not started | None |
+| Federated learning | Future federated-learning design | Concept | Not started | None |
+
+The status terms are defined in [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md). Specification detail is not implementation maturity.
 
 ---
 
@@ -118,46 +122,48 @@ gantt
     title AI Home OS Version Roadmap
     dateFormat  YYYY-MM
     section v1.x Consolidation
-    v1.0 Release          :done,    v1,  2026-01, 2026-07
-    v1.1 Stability + LLM upgrade :active, v11, 2026-07, 2026-12
-    v1.2 Plugin SDK GA    :         v12, 2026-12, 2027-03
-    v1.3 WebAuthn + FIDO2 :         v13, 2027-03, 2027-06
+    Specification draft  :active,  spec, 2026-01, 2026-12
+    First vertical-slice prototype : v01, 2026-10, 2027-01
+    v1 foundation implementation : v1, 2027-01, 2027-09
+    v1.1 Stability + LLM evaluation : v11, 2027-09, 2027-12
+    v1.2 Plugin SDK target :        v12, 2028-01, 2028-04
+    v1.3 WebAuthn + FIDO2 target :  v13, 2028-04, 2028-07
 
     section v2.x Autonomous
-    v2.0 RL Optimizer     :         v20, 2027-06, 2027-12
-    v2.1 V2G + Grid API   :         v21, 2027-12, 2028-06
-    v2.2 Multi-site       :         v22, 2028-06, 2028-12
+    v2.0 RL Optimizer target :      v20, 2028-07, 2029-01
+    v2.1 V2G + Grid API target :    v21, 2029-01, 2029-07
+    v2.2 Multi-site target :        v22, 2029-07, 2030-01
 
     section v3.x Federated
-    v3.0 Federated AI     :         v30, 2029-01, 2029-12
-    v3.1 Confidential Computing :   v31, 2030-01, 2030-12
-    v3.2 Zero-Knowledge Privacy :   v32, 2031-01, 2031-12
+    v3.0 Federated AI target :       v30, 2030-01, 2030-12
+    v3.1 Confidential Computing target : v31, 2031-01, 2031-12
+    v3.2 Zero-Knowledge Privacy target : v32, 2032-01, 2032-12
 ```
 
 | Version | Timeline | Theme | Key Additions |
 |---------|---------|-------|--------------|
-| **v1.0** | 2026 H1 | Foundation | Complete residential platform |
-| **v1.1** | 2026 H2 | Stability | LLM upgrade, latency reduction |
-| **v1.2** | 2027 Q1 | Ecosystem | Plugin SDK GA, marketplace |
-| **v1.3** | 2027 Q2 | Auth | WebAuthn, hardware security keys |
-| **v2.0** | 2027 H2 | Learning | Reinforcement learning energy optimizer |
-| **v2.1** | 2028 H1 | Grid | V2G bidirectional EV, demand response API |
-| **v2.2** | 2028 H2 | Scale | Multi-site management, commercial tier |
-| **v3.0** | 2029 | Privacy | Federated learning, differential privacy |
-| **v3.1** | 2030 | Trust | Confidential computing, attestation |
-| **v3.2** | 2031 | Sovereignty | Zero-knowledge proofs, verifiable AI |
+| **Specification draft** | In progress | Design | Sixteen draft architecture chapters; no implementation |
+| **First prototype** | Target 2026 Q4–2027 Q1 | Vertical slice | One sensor-to-action path with authentication, audit, tests, and recovery evidence |
+| **v1 foundation** | Target 2027 | Foundation | First integrated residential implementation |
+| **v1.1** | Target after v1 validation | Stability | LLM evaluation and latency reduction |
+| **v1.2** | Target after v1.1 | Ecosystem | Plugin SDK and marketplace |
+| **v1.3** | Target after v1.2 | Authentication | WebAuthn and hardware security keys |
+| **v2.x** | Future concept | Learning and scale | RL optimization, grid integration, and multi-site management |
+| **v3.x** | Future concept | Privacy and sovereignty | Federated learning, confidential computing, and verifiable AI |
+
+All implementation dates are planning targets and must not be interpreted as release history. A milestone is complete only when its evidence is linked from `IMPLEMENTATION_STATUS.md`.
 
 ---
 
-## 4. v1.x — Consolidation (2026–2027)
+## 4. Proposed v1.x Implementation and Consolidation
 
 ### 4.1 v1.1 — LLM Upgrade and Latency Reduction
 
-**Target: 2026 Q3–Q4**
+**Status:** Concept; schedule begins only after the v1 foundation is implemented and validated.
 
 The LLM landscape evolves rapidly. By 2026 H2, models in the 7B–14B parameter range are expected to match current 70B performance on reasoning tasks, dramatically reducing VRAM requirements and response latency.
 
-| Current (v1.0) | v1.1 Target | Improvement |
+| Proposed v1 baseline | v1.1 target | Intended improvement |
 |---------------|------------|------------|
 | Llama 3.3 70B coordinator (RTX 4070 12GB) | Llama 4.x 30B equivalent | 50% VRAM reduction |
 | ~1.8s median response latency | <0.9s median | 2× faster |
@@ -320,7 +326,7 @@ async def webauthn_register_complete(
 
 ---
 
-## 5. v2.0 — Autonomous Intelligence (2027–2028)
+## 5. Proposed v2 — Autonomous Intelligence
 
 ### 5.1 Reinforcement Learning Energy Optimizer
 
@@ -556,7 +562,7 @@ flowchart TD
 
 ---
 
-## 6. v3.0 — Federated & Sovereign AI (2029–2031)
+## 6. Proposed v3 — Federated and Sovereign AI
 
 ### 6.1 Federated Learning
 
@@ -695,50 +701,35 @@ Verification:   On-chain (Ethereum L2) or off-chain verifier
 
 ### 7.1 LLM Capability Trajectory
 
-```mermaid
-xychart-beta
-    title "LLM Performance on Home Automation Reasoning (JARVIS benchmark)"
-    x-axis ["2026 Q1", "2026 Q4", "2027 Q2", "2028 Q1", "2029 Q1"]
-    y-axis "Benchmark Score (0-100)" 0 --> 100
-    line [62, 71, 80, 87, 93]
-```
+Model selection is an implementation-time evaluation, not a version promise. No model, latency result, VRAM measurement, or reasoning score has been validated for AI Home OS yet.
 
-| Version | Model | Parameters | VRAM | Response (p50) | Benchmark |
-|---------|-------|-----------|------|----------------|-----------|
-| v1.0 | Llama 3.3 | 70B | 10.2 GB | 1.8s | 62/100 |
-| v1.1 | Llama 4 Scout | 17B MoE | 5.4 GB | 0.9s | 71/100 |
-| v2.0 | Llama 5 | 20B | 4.8 GB | 0.6s | 80/100 |
-| v2.2 | (TBD 2028) | 8B equiv | 3.2 GB | 0.3s | 87/100 |
-| v3.0 | On-device SLM | 3B | 2.0 GB | 0.15s | 93/100 |
+Before selecting a model, the project must publish a versioned evaluation set covering multi-turn intent handling, ambiguous references, unauthorized requests, prompt injection, tool selection, safe refusal, recovery from unavailable devices, and multilingual household speech. The evaluation harness, prompts, hardware, model artifact and quantization, raw results, error analysis, and dated commit must be reproducible.
 
-*Benchmark score: JARVIS-bench, a home automation reasoning suite of 200 multi-turn tasks.*
+| Selection gate | Evidence required |
+|----------------|-------------------|
+| Functional quality | Pass thresholds defined before running the candidate evaluation |
+| Security behavior | No bypass of tool scopes, authentication, confirmation, or the Sensitive Action Gateway |
+| Latency | Measured p50, p95, and p99 on named reference hardware under representative concurrency |
+| Resource use | Measured RAM, VRAM, CPU/GPU utilization, power, and thermal behavior |
+| Reliability | Soak, restart, malformed-output, and dependency-failure results |
+| Privacy | Verified local data flow and documented behavior for every optional cloud path |
+
+Roadmap releases may change models when a candidate passes these gates. Future model names, parameter counts, and performance are intentionally unspecified until measured evidence exists.
 
 ### 7.2 Specialist Model Strategy
 
-As SLMs (Small Language Models) improve, the multi-agent architecture shifts from large coordinator + specialists to a **swarm of small specialists** sharing a common embedding space:
+The project may evaluate smaller specialist models if they improve isolation, cost, or latency without weakening measured task quality or security. The following is a research direction rather than a committed version architecture:
 
 ```
-v1.0 (current):           v3.0 (target):
-  Coordinator: 70B    →     Coordinator: 3B (fast, local)
-  Fast agent: 14B     →     Energy expert: 1B (quantized)
-  Energy: 7B          →     Security expert: 1B
-                            Context expert: 1B
-                            Memory expert: 1B
-                            (all run in parallel on CPU)
+Candidate baseline:          Research alternative:
+  Local coordinator      →     Local coordinator
+  Policy-owned tools     →     Isolated domain specialists
+  Measured on target HW  →     Same evaluation and policy gates
 ```
 
 ### 7.3 On-Device AI (Edge Inference)
 
-By v3.0, the target is to run the primary coordinator model on the home server CPU (no GPU required):
-
-| Hardware | v1.0 | v3.0 |
-|---------|------|------|
-| GPU | RTX 4070 12GB (required) | Optional (acceleration only) |
-| CPU | Intel Core i7-12700 | AMD Ryzen 9 7900 (or equivalent) |
-| RAM | 64 GB DDR5 | 32 GB sufficient |
-| Inference | GPU-bound | CPU + AVX-512 VNNI |
-
-This enables AI Home OS deployment on **lower-cost server hardware**, broadening accessibility.
+CPU-only and accelerator-assisted profiles may be evaluated after the first runnable vertical slice exists. Minimum hardware will be published only from the reproducible latency, concurrency, power, thermal, and reliability measurements defined above. No current version has a validated CPU, GPU, RAM, or response-time requirement.
 
 ---
 
@@ -963,14 +954,14 @@ Healthcare-specific AI Home OS constraints:
     clinical staff approval (no autonomous action)
     
   Data sovereignty:
-    Patient presence/room data: HIPAA-compliant storage only
+    Patient presence/room data: deployment-specific privacy and security controls
     No federated learning participation with patient data
     All data stays within hospital network (never cloud)
     
   Audit trail:
     Every action affecting a patient room is logged
     Tamper-evident, regulatory-grade audit log
-    7-year retention minimum
+    Retention period set by the applicable jurisdiction and approved records policy
 
   Clinical integration (v3.0):
     - HL7 FHIR integration for patient record context
@@ -1031,8 +1022,8 @@ github.com/ai-home-os/
   ├── core/               Apache 2.0 — AI reasoning engine
   ├── ha-bridge/          MIT — Home Assistant integration
   ├── plugin-sdk/         Apache 2.0 — Plugin development kit
-  ├── mobile-app/         MIT — React Native iOS/Android app
-  ├── panel-ui/           MIT — React wall panel UI
+  ├── client-flutter/     MIT — shared Flutter packages and Android/iOS apps
+  ├── panel-ui/           MIT — Flutter Web wall panel target
   ├── docs/               CC BY 4.0 — This specification
   ├── installer/          Apache 2.0 — One-command setup
   └── examples/           MIT — Sample automations and plugins
@@ -1097,43 +1088,44 @@ actions:
 
 ## 14. Regulatory Compliance Roadmap
 
+This section identifies areas for a future compliance assessment. It does not claim that AI Home OS, any proposed version, or any example deployment complies with a law, regulation, standard, certification, or regulator program. Applicability varies by jurisdiction, deployment type, data role, hardware, and operating model. Qualified legal, privacy, accessibility, safety, and certification specialists must establish the obligations and evidence for each intended market before release.
+
 ### 14.1 UAE & GCC Compliance
 
-| Regulation | Requirement | AI Home OS compliance |
-|-----------|------------|----------------------|
-| **UAE PDPL** (Personal Data Protection Law, 2021) | Data localisation, consent, right to erasure | v1.0 — fully local, erasure API |
-| **DEWA Smart Home Initiative** | Energy reporting API | v2.1 — OpenADR bridge |
-| **Dubai Building Code** | Accessibility standards | v2.0 — WCAG 2.1 AA compliant UI |
-| **UAE AI Ethics Guidelines** | Explainability, human oversight | v1.0 — JARVIS explains reasoning |
-| **SASO** (Saudi Standards) | Product safety for IoT | v2.0 — CE/SASO certification |
-| **Bahrain PDPL** | Similar to UAE PDPL | v2.0 — Gulf compliance profile |
+| Candidate instrument or authority | Assessment work required | Current evidence |
+|-----------------------------------|--------------------------|------------------|
+| UAE privacy and data-protection requirements | Determine roles, lawful bases, notices, consent, transfers, retention, rights handling, and breach duties | None |
+| UAE utility and building requirements | Confirm whether energy interfaces, installation work, accessibility, or building controls fall within applicable programs and codes | None |
+| UAE AI ethics guidance | Map transparency, explainability, accountability, and human-oversight expectations to testable controls | None |
+| Saudi product and IoT requirements | Identify applicable product safety, radio, cybersecurity, import, and conformity-assessment obligations | None |
+| Bahrain privacy requirements | Determine roles, processing grounds, transfers, rights, retention, and security obligations | None |
 
 ### 14.2 European Compliance (for EU deployments)
 
-| Regulation | Requirement | AI Home OS version |
-|-----------|------------|-------------------|
-| **GDPR** | Right to erasure, data minimisation, consent | v1.0 (core) + v1.3 (WebAuthn) |
-| **EU AI Act** (2024) | High-risk AI system requirements (biometrics) | v1.3 — facial recognition compliance mode |
-| **EN 50631-1** | Smart appliance interoperability | v2.0 |
-| **RED Directive** | Radio equipment security | v1.0 (hardware vendor responsibility) |
-| **NIS2 Directive** | Critical infrastructure cybersecurity | v2.0 (enterprise deployments) |
-| **Cyber Resilience Act** | Product with digital elements | v2.0 — SBOM, vulnerability disclosure |
+| Candidate instrument or standard | Assessment work required | Current evidence |
+|----------------------------------|--------------------------|------------------|
+| GDPR and national data-protection law | Determine controller/processor roles, lawful bases, biometric treatment, rights, DPIA, transfers, retention, and security measures | None |
+| EU AI Act | Classify each intended use and actor, then determine prohibited-practice, transparency, high-risk, general-purpose, and post-market duties | None |
+| Appliance interoperability standards | Confirm applicable editions, product scope, conformance tests, and certification route | None |
+| Radio Equipment Directive and delegated cybersecurity requirements | Allocate manufacturer and integrator duties and collect hardware/software conformity evidence | None |
+| NIS2 and national implementing law | Determine whether an operator and deployment are in scope and document required risk and incident processes | None |
+| Cyber Resilience Act | Determine product scope and roles; plan secure development, SBOM, vulnerability handling, support, and conformity evidence | None |
 
-### 14.3 EU AI Act Compliance (Biometrics)
+### 14.3 Biometric Deployment Assessment
 
-The EU AI Act classifies real-time biometric identification in public spaces as **high-risk**. For residential deployments this does not apply, but for commercial/hotel deployments:
+Biometric classification depends on the exact function, setting, people affected, operator, jurisdiction, and current law. Residential, workplace, hospitality, healthcare, and public-space deployments must each receive a documented legal and fundamental-rights assessment before biometric features are enabled.
 
 ```
-EU AI Act compliance checklist for commercial AI Home OS:
+Pre-release evidence checklist for a proposed biometric deployment:
 
-  □ Technical documentation (Article 11) — published
-  □ Conformity assessment — third-party (Article 43)
-  □ Registration in EU database (Article 51)
-  □ Transparency notice to persons identified (Article 52)
-  □ Human oversight system (Article 14) — alerts to reception staff
-  □ Accuracy, robustness, cybersecurity (Article 15) — tested per EN 17526
-  □ Post-market monitoring (Article 61) — JARVIS audit logs
-  □ Incident reporting within 15 days (Article 73)
+  □ Intended use, setting, operator, affected people, and jurisdictions documented
+  □ Applicable-law and prohibited-use assessment approved by qualified counsel
+  □ Data-protection impact and lawful-processing assessment approved
+  □ Notice, consent or other legal basis, rights, and human oversight defined
+  □ Accuracy, demographic performance, robustness, and cybersecurity measured
+  □ Technical documentation, logs, retention, and access controls verified
+  □ Required conformity, registration, monitoring, and incident processes identified
+  □ Release evidence linked from IMPLEMENTATION_STATUS.md
 ```
 
 ---
@@ -1258,7 +1250,7 @@ The wall panel and mobile app interfaces of v1.0 will be increasingly supplement
 
 ## 17. Full Specification Index
 
-This section provides a complete cross-reference of all 16 chapters of the AI Home OS specification, with key sections and page indicators for the complete document.
+This section provides a cross-reference of all 17 draft chapters of the AI Home OS specification.
 
 | Ch | Title | Core Topics | BOM Cost |
 |----|-------|------------|---------|
@@ -1274,10 +1266,11 @@ This section provides a complete cross-reference of all 16 chapters of the AI Ho
 | 10 | Energy Intelligence | Solar/battery/grid, EV charging, NILM, MILP optimizer, tariffs, demand response, LLM reports | ~$13,870 |
 | 11 | Security Architecture | STRIDE, Zero Trust, mTLS, Vault, IAM/RBAC, MQTT ACL, IDS, GDPR erasure, audit log | — |
 | 12 | API & Integration Layer | REST/WebSocket/MQTT/gRPC, HA bridge, webhooks, plugin SDK, OpenTelemetry, 11 integrations | — |
-| 13 | Mobile Application | React Native/Expo 52, Zustand, WatermelonDB, biometric auth, offline mode, widgets, WCAG AA | — |
-| 14 | Wall Panels | RPi 5 + Waveshare 10.1", Chromium kiosk, React/Vite, PIR, NFC, 8 screens, BOM 7+1 panels | ~$2,356 |
+| 13 | Mobile Application | Flutter, Riverpod, Drift/SQLite, biometric auth, offline mode, widgets, WCAG AA | — |
+| 14 | Wall Panels | RPi 5 + Waveshare 10.1", Chromium kiosk with Flutter Web, PIR, NFC, 8 screens, BOM 7+1 panels | ~$2,356 |
 | 15 | AI Conversations | 60+ conversations: morning routines, energy, security, Arabic, guests, children, RL, proactive | — |
 | 16 | Future Roadmap | v1.x–v3.0, RL optimizer, V2G, federated learning, ZKP, commercial, open source, regulatory | — |
+| 17 | Deployment and Application Architecture | Backend and interface boundaries, Proxmox, HAOS and AI VMs, GPU placement, storage, failure domains, deployment profiles, implementation order | — |
 
 **Total estimated hardware (residential reference):** ~$35,114 (varies significantly by market)
 
@@ -1307,11 +1300,11 @@ This section provides a complete cross-reference of all 16 chapters of the AI Ho
 
 AI Home OS began as a question: **can a home be as intelligent as a person, while remaining private, local, and under the complete control of its owner?**
 
-The sixteen chapters of this specification answer that question in the affirmative — not as a promise, but as a complete, buildable design. Every system described here is constructed from real, available technology. There is no speculative hardware, no assumed cloud service, no vendor lock-in baked into the foundations.
+The sixteen chapters propose one technically grounded answer to that question. They have not yet demonstrated that the complete design is buildable, secure, reliable, or operational at the stated scale. Those claims require implementation and measured evidence.
 
 ### What This System Is
 
-It is a **reasoning layer** built above the execution layer (Home Assistant), above the sensor layer (Zigbee, MQTT), and above the physical layer (Cat6A, VLAN). It brings together:
+The proposed system is a **reasoning layer** above the execution layer (Home Assistant), sensor layer (Zigbee and MQTT), and physical layer (Cat6A and VLANs). The design brings together:
 
 - A **multi-agent LLM architecture** that thinks before it acts, explains its reasoning, and knows when to ask rather than assume
 - A **multi-modal identity system** that knows who is home, where they are, what they are doing, and what they prefer — without relying on any external service to do so
@@ -1322,15 +1315,15 @@ It is a **reasoning layer** built above the execution layer (Home Assistant), ab
 
 ### What This System Is Not
 
-It is not a cloud product. It is not a subscription that can be revoked. It is not a system that stops working when a company is acquired, when servers go down, or when a privacy policy changes. Every core capability works on a local network with no internet connection.
+The design targets local operation without a mandatory cloud subscription. This behavior has not yet been implemented or verified.
 
 It is not a product for people who want to buy convenience. It is a specification for builders — engineers, architects, technologists — who want to understand every layer of what they are deploying and why each decision was made.
 
 ### The Path Forward
 
-The roadmap in this chapter is not a wish list. It is a sequence of technically grounded capabilities, each building on the decisions made in the version before it. The RL energy optimizer requires the six months of TimescaleDB data that the v1.0 NILM system collects. The federated learning in v3.0 requires the local model training infrastructure built in v2.0. The zero-knowledge proofs in v3.2 require the cryptographic audit log designed in v1.0.
+The roadmap is a proposed sequence of technically grounded capabilities. Later milestones depend on earlier components only after those components have been implemented and validated. For example, an RL energy optimizer would require reliable historical data collection, and federated learning would require validated local training infrastructure.
 
-Every chapter in this specification was written with this continuity in mind. The decisions made today do not constrain the vision for 2031 — they enable it.
+Each milestone must link runnable code, tests, integration results, and operational evidence in `IMPLEMENTATION_STATUS.md` before it is described as complete.
 
 ---
 
@@ -1343,6 +1336,7 @@ AI Home OS is an attempt to build that intelligence. Not perfect. Not finished. 
 ---
 
 *Previous: [Chapter 15 — AI Conversation Examples](Chapter-15-AI-Conversation-Examples.md)*  
+*Next: [Chapter 17 — Deployment and Application Architecture](Chapter-17-Deployment-and-Application-Architecture.md)*
 *[Return to Introduction: AI Home OS Architecture.md](../AI%20Home%20OS%20Architecture.md)*
 
 ---
@@ -1350,7 +1344,7 @@ AI Home OS is an attempt to build that intelligence. Not perfect. Not finished. 
 > **Document maintained by:** AI Home OS Architecture Team  
 > **Last updated:** 2026-07-17  
 > **Chapter status:** Draft v1.0 — Open for community review  
-> **Total specification:** 16 chapters · ~28,000 lines · Complete
+> **Total specification:** 17 draft chapters; implementation and validation have not started
 
 ---
 
